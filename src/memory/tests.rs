@@ -56,10 +56,13 @@ const RO: u32 = libc::PROT_READ as u32;
 #[cfg(target_os = "linux")]
 const NONE: u32 = libc::PROT_NONE as u32;
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::System::Memory::{
-    PAGE_EXECUTE_READ as RX, PAGE_EXECUTE_READWRITE as RWX, PAGE_NOACCESS as NONE,
-    PAGE_READONLY as RO,
-};
+const RX: u32 = 0x20;
+#[cfg(target_os = "windows")]
+const RWX: u32 = 0x40;
+#[cfg(target_os = "windows")]
+const RO: u32 = 0x02;
+#[cfg(target_os = "windows")]
+const NONE: u32 = 0x01;
 
 impl Allocation {
     fn new() -> Self {
@@ -81,13 +84,8 @@ impl Allocation {
         #[cfg(target_os = "windows")]
         // SAFETY: This test owns the new allocation.
         let address = unsafe {
-            use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, VirtualAlloc};
-            let pointer = VirtualAlloc(
-                std::ptr::null(),
-                page_size * 3,
-                MEM_COMMIT | MEM_RESERVE,
-                RWX,
-            );
+            let pointer =
+                platform::VirtualAlloc(std::ptr::null(), page_size * 3, 0x1000 | 0x2000, RWX);
             assert!(!pointer.is_null());
             pointer as usize
         };
@@ -114,12 +112,7 @@ impl Allocation {
         unsafe {
             let mut old = 0;
             assert_ne!(
-                windows_sys::Win32::System::Memory::VirtualProtect(
-                    address as *const _,
-                    self.page_size,
-                    protection,
-                    &mut old
-                ),
+                platform::VirtualProtect(address as *const _, self.page_size, protection, &mut old),
                 0
             );
         }
@@ -135,9 +128,8 @@ impl Allocation {
         #[cfg(target_os = "windows")]
         // SAFETY: Only this test owns the page.
         unsafe {
-            use windows_sys::Win32::System::Memory::{MEM_DECOMMIT, VirtualFree};
             assert_ne!(
-                VirtualFree(address as *mut _, self.page_size, MEM_DECOMMIT),
+                platform::VirtualFree(address as *mut _, self.page_size, 0x4000),
                 0
             );
         }
@@ -172,8 +164,7 @@ impl Drop for Allocation {
         #[cfg(target_os = "windows")]
         // SAFETY: This test owns the allocation; no references remain.
         unsafe {
-            use windows_sys::Win32::System::Memory::{MEM_RELEASE, VirtualFree};
-            assert_ne!(VirtualFree(self.address as *mut _, 0, MEM_RELEASE), 0);
+            assert_ne!(platform::VirtualFree(self.address as *mut _, 0, 0x8000), 0);
         }
     }
 }

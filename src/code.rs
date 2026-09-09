@@ -1,6 +1,6 @@
-use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic};
-
 use crate::Error;
+
+mod prefix;
 
 pub(crate) const MAX_PREFIX: usize = 32;
 const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
@@ -23,28 +23,14 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
     let address = source.checked_add(offset).ok_or(Error::InvalidRange)?;
     let mut replacement = jump(address, target)?;
     let prefix = &bytes[offset..];
-    let mut decoder = Decoder::with_ip(64, prefix, address as u64, DecoderOptions::NONE);
     let mut length = 0;
     while length < replacement.len() {
-        if !decoder.can_decode() {
+        if length == prefix.len() {
             return Err(Error::InsufficientSpace);
         }
-        let instruction = decoder.decode();
-        if instruction.is_invalid() {
-            return Err(Error::InvalidInstruction);
-        }
-        length += instruction.len();
+        let (size, terminal) = prefix::instruction(&prefix[length..])?;
+        length += size;
         // Stop at a return, tail jump, or trap to avoid the next function.
-        let terminal = matches!(
-            instruction.flow_control(),
-            FlowControl::Return
-                | FlowControl::UnconditionalBranch
-                | FlowControl::IndirectBranch
-                | FlowControl::Exception
-        ) || matches!(
-            instruction.mnemonic(),
-            Mnemonic::Int | Mnemonic::Int1 | Mnemonic::Int3
-        );
         if terminal && length < replacement.len() {
             return Err(Error::InsufficientSpace);
         }

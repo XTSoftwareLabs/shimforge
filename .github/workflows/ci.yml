@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'macros/**'
       - 'tests/**'
       - 'examples/**'
       - 'Cargo.toml'
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'macros/**'
       - 'tests/**'
       - 'examples/**'
       - 'Cargo.toml'
@@ -105,4 +107,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: '1.85.0'
-      - run: cargo check --all-targets --locked
+      - run: cargo check --workspace --all-targets --locked

@@ -38,7 +38,7 @@ fn all_errors_are_useful() {
         ),
         (
             Error::InvalidInstruction,
-            "function prefix contains an invalid instruction",
+            "function prefix contains an unsupported or invalid instruction",
         ),
         (
             Error::Os {
@@ -51,6 +51,7 @@ fn all_errors_are_useful() {
             Error::Mapping("missing".into()),
             "cannot inspect memory mapping: missing",
         ),
+        (Error::Expectation("missing call".into()), "missing call"),
     ];
     for (error, message) in cases {
         assert_eq!(error.to_string(), message);

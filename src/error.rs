@@ -1,6 +1,6 @@
 use std::fmt;
 
-/// A replacement could not be installed or restored.
+/// A mock could not be installed, checked, or restored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
@@ -20,7 +20,7 @@ pub enum Error {
     Overlap,
     /// The function ends before there is room for a jump.
     InsufficientSpace,
-    /// The function prefix contains an invalid instruction.
+    /// The function prefix contains an unsupported or invalid instruction.
     InvalidInstruction,
     /// An operating system call failed.
     Os {
@@ -31,6 +31,8 @@ pub enum Error {
     },
     /// The operating system's memory map could not be read or parsed.
     Mapping(String),
+    /// A call or expectation did not meet the mock's rules.
+    Expectation(String),
 }
 
 impl fmt::Display for Error {
@@ -45,10 +47,11 @@ impl fmt::Display for Error {
             Self::Overlap => f.write_str("target overlaps an active replacement"),
             Self::InsufficientSpace => f.write_str("function prefix is too short for a jump"),
             Self::InvalidInstruction => {
-                f.write_str("function prefix contains an invalid instruction")
+                f.write_str("function prefix contains an unsupported or invalid instruction")
             }
             Self::Os { operation, code } => write!(f, "{operation} failed (OS error {code})"),
             Self::Mapping(message) => write!(f, "cannot inspect memory mapping: {message}"),
+            Self::Expectation(message) => f.write_str(message),
         }
     }
 }

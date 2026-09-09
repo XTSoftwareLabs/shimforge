@@ -1,18 +1,14 @@
 use super::{PageRange, Region, os_error, syscall};
 use crate::Error;
-use windows_sys::Win32::System::{
-    Diagnostics::Debug::{FlushInstructionCache, ReadProcessMemory},
-    Memory::{
-        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
-        VirtualProtect, VirtualQuery,
-    },
-    SystemInformation::{GetSystemInfo, SYSTEM_INFO},
-    Threading::GetCurrentProcess,
-};
+mod api;
+use api::*;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+pub(super) use api::{VirtualAlloc, VirtualFree, VirtualProtect};
 
 pub(super) fn region_at(address: usize) -> Result<Option<Region>, Error> {
-    let mut information = MEMORY_BASIC_INFORMATION::default();
+    let mut information = MemoryInfo::default();
     // SAFETY: The output has the required size. VirtualQuery checks the address.
     let queried = syscall("query memory", 0, || unsafe {
         VirtualQuery(
@@ -73,7 +69,7 @@ pub(super) fn read_bytes(address: usize, length: usize) -> Result<Vec<u8>, Error
 }
 
 pub(super) fn page_size() -> Result<usize, Error> {
-    let mut information = SYSTEM_INFO::default();
+    let mut information = SystemInfo::default();
     // SAFETY: information is a writable SYSTEM_INFO.
     unsafe { GetSystemInfo(&mut information) };
     Ok(information.dwPageSize as usize)

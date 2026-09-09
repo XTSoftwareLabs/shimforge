@@ -11,14 +11,15 @@ keywords = ["mock", "testing", "detour"]
 categories = ["development-tools::testing"]
 include = ["src/**", "tests/**", "Cargo.toml", "LICENSE", "README.md"]
 
+[workspace]
+members = ["macros"]
+resolver = "3"
+
 [dependencies]
-iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }
+shimforge-macros = { version = "0.1.0", path = "macros" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_Debug", "Win32_System_SystemInformation"] }
 
 [profile.test]
 opt-level = 0

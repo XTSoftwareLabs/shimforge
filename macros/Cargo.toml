@@ -1,0 +1,16 @@
+[package]
+name = "shimforge-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Typed mock generation for shimforge"
+license = "MIT"
+repository = "https://github.com/XTSoftwareLabs/shimforge"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "visit"] }

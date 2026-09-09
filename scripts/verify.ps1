@@ -17,12 +17,12 @@ function Invoke-Cargo {
 Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
     Invoke-Cargo -CargoArguments @('fmt', '--all', '--check')
-    Invoke-Cargo -CargoArguments @('clippy', '--all-targets', '--locked', '--', '-D', 'warnings')
-    Invoke-Cargo -CargoArguments @('test', '--locked', '--', '--test-threads=1')
+    Invoke-Cargo -CargoArguments @('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
+    Invoke-Cargo -CargoArguments @('test', '--workspace', '--locked', '--', '--test-threads=1')
 
     New-Item -ItemType Directory -Path coverage/windows -Force | Out-Null
     Invoke-Cargo -CargoArguments @(
-        'llvm-cov', '--all-targets', '--locked',
+        'llvm-cov', '--workspace', '--all-targets', '--locked',
         '--ignore-filename-regex', '(^|[/\\])tests([/\\]|\.rs$)',
         '--fail-under-lines', '100', '--fail-under-functions', '100',
         '--lcov', '--output-path', 'coverage/windows/lcov.info',

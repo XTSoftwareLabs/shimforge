@@ -7,16 +7,28 @@
 )))]
 compile_error!("shimforge supports only Windows x86-64 and Linux x86-64");
 
+mod asynchronous;
 mod code;
 mod error;
+mod expectation;
 mod memory;
 
 #[cfg(test)]
 mod tests;
 
+pub use asynchronous::{AsyncExpectation, AsyncMock};
 pub use error::Error;
+pub use expectation::{CallCount, Expectation, Sequence};
 
-use std::sync::{Mutex, MutexGuard, TryLockError};
+#[doc(hidden)]
+pub use shimforge_macros::__mock;
+
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::expectation::{CallGuard, Config, Control, Meta, Rule, State, lock};
+}
+
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 static SESSION: Mutex<()> = Mutex::new(());
 
@@ -27,6 +39,18 @@ struct Patch {
     replacement: Vec<u8>,
 }
 
+struct OwnedMock {
+    control: Arc<dyn expectation::Control>,
+    detach: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl Drop for OwnedMock {
+    fn drop(&mut self) {
+        (self.detach.take().expect("mock was already detached"))();
+        self.control.deactivate();
+    }
+}
+
 /// A scope for function replacements that affect all threads.
 ///
 /// Drop restores replacements in reverse order, including during a panic.
@@ -34,10 +58,16 @@ struct Patch {
 #[must_use = "keep the session alive while using the mocks"]
 pub struct Session {
     patches: Vec<Patch>,
+    mocks: Vec<OwnedMock>,
     _lock: MutexGuard<'static, ()>,
 }
 
 impl Session {
+    #[doc(hidden)]
+    pub fn __borrow(&mut self) -> &mut Self {
+        self
+    }
+
     /// Opens a session, or returns [`Error::Busy`] without blocking.
     ///
     /// Only one session can be active. Its lock does not stop function calls.
@@ -49,6 +79,7 @@ impl Session {
         };
         Ok(Self {
             patches: Vec::new(),
+            mocks: Vec::new(),
             _lock: lock,
         })
     }
@@ -112,11 +143,54 @@ impl Session {
         Ok(())
     }
 
-    /// Restores all replacements, newest first. Safe to call repeatedly.
+    /// Checks all call expectations without removing the mocks.
+    pub fn verify(&self) -> Result<(), Error> {
+        for mock in &self.mocks {
+            mock.control.verify()?;
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    /// # Safety
+    /// Follow `replace_raw` rules. Detach must release the matching mock state.
+    pub unsafe fn __install(
+        &mut self,
+        source: *const (),
+        target: *const (),
+        control: Arc<dyn expectation::Control>,
+        detach: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), Error> {
+        let mock = OwnedMock {
+            control,
+            detach: Some(detach),
+        };
+        self.mocks.reserve(1);
+        // SAFETY: the caller provides matching functions and keeps them idle.
+        unsafe {
+            self.replace_raw(source, target)?;
+        }
+        self.mocks.push(mock);
+        Ok(())
+    }
+
+    /// Restores all replacements, then checks their expectations.
     ///
     /// Keep target calls stopped as required by [`Self::replace_raw`]. On error,
-    /// the patch stays in the session so you can retry.
+    /// a failed patch stays in the session so you can retry. Expectation errors
+    /// are returned after all patches have been removed.
     pub fn restore(&mut self) -> Result<(), Error> {
+        self.restore_patches()?;
+        let result = self.verify();
+        self.detach();
+        result
+    }
+
+    fn detach(&mut self) {
+        self.mocks.clear();
+    }
+
+    fn restore_patches(&mut self) -> Result<(), Error> {
         while let Some(patch) = self.patches.last() {
             // SAFETY: replace_raw requires the target to stay loaded and idle here.
             unsafe {
@@ -130,8 +204,80 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        finish(self.restore(), std::process::abort);
+        finish(self.restore_patches(), std::process::abort);
+        let result = self.verify();
+        self.detach();
+        if !std::thread::panicking() {
+            if let Err(error) = result {
+                panic!("{error}");
+            }
+        }
     }
+}
+
+/// Creates a mock with argument matching and checked call counts.
+///
+/// ```
+/// fn read_count(key: &str) -> usize { key.len() }
+/// let mut session = shimforge::Session::new()?;
+/// let mock = shimforge::mock!(session, read_count, fn(&str) -> usize)?;
+/// mock.expect().with(|key| *key == "orders").once().returns(12)?;
+/// assert_eq!(read_count("orders"), 12);
+/// # Ok::<(), shimforge::Error>(())
+/// ```
+///
+/// Matchers borrow arguments. Return closures may capture owned values and must
+/// be `Send + 'static`. Follow the same runtime safety rules as [`replace!`].
+///
+/// The source signature must match:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: u64) -> u64 { value }
+/// shimforge::mock!(session, source, fn(u32) -> u32);
+/// ```
+/// Captures must be safe to send between threads:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source() -> usize { 1 }
+/// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
+/// let value = std::rc::Rc::new(2);
+/// mock.expect().returning(move || *value);
+/// ```
+/// Captures must outlive the test's stack:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source() -> usize { 1 }
+/// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
+/// let value = String::from("token");
+/// mock.expect().returning(|| value.len());
+/// ```
+/// Return closures cannot create dangling references:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: &str) -> &str { value }
+/// let mock = shimforge::mock!(session, source, fn(&str) -> &str).unwrap();
+/// mock.expect().returning(|_| String::from("temporary").as_str());
+/// ```
+/// Use [`replace!`] for unsafe or native functions:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// extern "C" fn source() -> usize { 1 }
+/// shimforge::mock!(session, source, extern "C" fn() -> usize);
+/// ```
+#[macro_export]
+macro_rules! mock {
+    ($($input:tt)*) => { $crate::__mock!($crate, $($input)*) };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __install {
+    ($session:expr, $source:expr, $target:expr, $control:expr, $detach:expr) => {{
+        let (session, source, target, control, detach) =
+            (($session).__borrow(), $source, $target, $control, $detach);
+        // SAFETY: the generated mock checks types; callers keep patching idle.
+        unsafe { session.__install(source, target, control, detach) }
+    }};
 }
 
 fn finish(result: Result<(), Error>, fatal: fn() -> !) {
@@ -189,7 +335,7 @@ macro_rules! replace {
         // Infer source lifetimes, then require matching pointer types.
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
-        let session = &mut $session;
+        let session = ($session).__borrow();
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
@@ -200,7 +346,7 @@ macro_rules! replace {
         // Infer source lifetimes, then require matching pointer types.
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
-        let session = &mut $session;
+        let session = ($session).__borrow();
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
@@ -211,7 +357,7 @@ macro_rules! replace {
         // Infer source lifetimes, then require matching pointer types.
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
-        let session = &mut $session;
+        let session = ($session).__borrow();
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
@@ -222,7 +368,7 @@ macro_rules! replace {
         // Infer source lifetimes, then require matching pointer types.
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
-        let session = &mut $session;
+        let session = ($session).__borrow();
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};

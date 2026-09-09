@@ -9,4 +9,4 @@ RUN rustup toolchain install 1.85.0 --profile minimal \
 ENV CARGO_TARGET_DIR=/target
 WORKDIR /work
 
-CMD ["bash", "-c", "cargo +1.85.0 check --all-targets --locked && bash scripts/verify.sh"]
+CMD ["bash", "-c", "cargo +1.85.0 check --workspace --all-targets --locked && bash scripts/verify.sh"]
