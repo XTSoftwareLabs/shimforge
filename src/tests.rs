@@ -1,5 +1,4 @@
 use super::*;
-use std::hint::black_box;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -9,14 +8,12 @@ pub(crate) fn serial() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[inline(never)]
 fn original(value: u64) -> u64 {
-    black_box(value).wrapping_add(109)
+    value.wrapping_add(109)
 }
 
-#[inline(never)]
 fn replacement(value: u64) -> u64 {
-    black_box(value).wrapping_add(207)
+    value.wrapping_add(207)
 }
 
 #[test]

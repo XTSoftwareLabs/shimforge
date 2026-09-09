@@ -377,9 +377,8 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     memory.assert_unchanged(memory.address, 32);
 }
 
-#[inline(never)]
 extern "C" fn native_replacement() -> u32 {
-    std::hint::black_box(93)
+    93
 }
 
 #[test]

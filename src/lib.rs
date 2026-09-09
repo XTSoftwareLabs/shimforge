@@ -63,7 +63,7 @@ impl Session {
     /// and lifetimes for every caller. Keep their code loaded and unchanged
     /// until restored. No thread may run the patched bytes during installation
     /// or restoration, including drop. No branch may enter those bytes midway.
-    /// The source must have a distinct entry point and must not be inlined.
+    /// Calls must reach the source entry. Inlined or merged calls cannot be isolated.
     /// Do not replace functions used by shimforge or its memory and OS code.
     /// The replacement must meet the safety rules its callers rely on.
     pub unsafe fn replace_raw(
@@ -160,6 +160,18 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x: u64| x, fn(u32) -> u32);
 /// ```
+/// The source must also match:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(x: u64) -> u64 { x }
+/// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
+/// ```
+/// Calling conventions must match:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// extern "C" fn source(x: u32) -> u32 { x }
+/// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
+/// ```
 /// Capturing closures are rejected:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new().unwrap();
@@ -169,34 +181,47 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// ```
 #[macro_export]
 macro_rules! replace {
+    (@infer $type:ty) => { _ };
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
-        let source: $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)? = $source;
+        let source = $source as fn($($crate::replace!(@infer $arg)),*) -> _;
         let target: $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)? = $target;
+        // Infer source lifetimes, then require matching pointer types.
+        fn checked<T>(source: T, _: T) -> T { source }
+        let source = checked(source, target);
         let session = &mut $session;
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? unsafe fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
-        let source: $(for<$($lt),+>)? unsafe fn($($arg),*) $(-> $ret)? = $source;
+        let source = $source as unsafe fn($($crate::replace!(@infer $arg)),*) -> _;
         let target: $(for<$($lt),+>)? unsafe fn($($arg),*) $(-> $ret)? = $target;
+        // Infer source lifetimes, then require matching pointer types.
+        fn checked<T>(source: T, _: T) -> T { source }
+        let source = checked(source, target);
         let session = &mut $session;
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? extern $abi:literal fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
-        let source: $(for<$($lt),+>)? extern $abi fn($($arg),*) $(-> $ret)? = $source;
+        let source = $source as extern $abi fn($($crate::replace!(@infer $arg)),*) -> _;
         let target: $(for<$($lt),+>)? extern $abi fn($($arg),*) $(-> $ret)? = $target;
+        // Infer source lifetimes, then require matching pointer types.
+        fn checked<T>(source: T, _: T) -> T { source }
+        let source = checked(source, target);
         let session = &mut $session;
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? unsafe extern $abi:literal fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
-        let source: $(for<$($lt),+>)? unsafe extern $abi fn($($arg),*) $(-> $ret)? = $source;
+        let source = $source as unsafe extern $abi fn($($crate::replace!(@infer $arg)),*) -> _;
         let target: $(for<$($lt),+>)? unsafe extern $abi fn($($arg),*) $(-> $ret)? = $target;
+        // Infer source lifetimes, then require matching pointer types.
+        fn checked<T>(source: T, _: T) -> T { source }
+        let source = checked(source, target);
         let session = &mut $session;
         // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
