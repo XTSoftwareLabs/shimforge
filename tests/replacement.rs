@@ -466,10 +466,10 @@ fn unsafe_function_installation_does_not_require_an_unsafe_block() {
     let _serial = serial_test();
     let mut session = Session::new().unwrap();
     replace!(session, unsafe_increment => unsafe_add_ten, unsafe fn(i64) -> i64).unwrap();
-    // SAFETY: both test functions accept every i64 value without other preconditions.
+    // SAFETY: Both test functions accept any i64.
     assert_eq!(unsafe { unsafe_increment(black_box(5)) }, 15);
     session.restore().unwrap();
-    // SAFETY: both test functions accept every i64 value without other preconditions.
+    // SAFETY: Both test functions accept any i64.
     assert_eq!(unsafe { unsafe_increment(black_box(5)) }, 6);
 }
 
@@ -501,10 +501,10 @@ fn system_abi_and_unsafe_native_functions_are_supported() {
     replace!(session, unsafe_native_sum => unsafe_native_product, unsafe extern "C" fn(i64, i64) -> i64)
         .unwrap();
     assert_eq!(system_sum(black_box(6), black_box(7)), 42);
-    // SAFETY: both test functions accept every pair of i64 values without other preconditions.
+    // SAFETY: Both test functions accept any pair of i64 values.
     assert_eq!(unsafe { unsafe_native_sum(black_box(6), black_box(7)) }, 42);
     session.restore().unwrap();
     assert_eq!(system_sum(black_box(6), black_box(7)), 13);
-    // SAFETY: both test functions accept every pair of i64 values without other preconditions.
+    // SAFETY: Both test functions accept any pair of i64 values.
     assert_eq!(unsafe { unsafe_native_sum(black_box(6), black_box(7)) }, 13);
 }

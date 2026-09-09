@@ -1,4 +1,4 @@
-# Builds a reusable Linux x86-64 validation environment and runs the local checks.
+# Builds the Linux test image and runs the checks.
 [CmdletBinding()]
 param([switch] $SkipBuild)
 

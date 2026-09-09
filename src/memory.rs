@@ -1,4 +1,4 @@
-//! Operating-system memory access with transactional permission restoration.
+//! Code reads and writes with rollback on failure.
 
 use crate::Error;
 
@@ -66,15 +66,14 @@ pub(crate) fn read(address: usize, limit: usize) -> Result<Vec<u8>, Error> {
     platform::read_bytes(address, available)
 }
 
-/// The caller must keep the mappings alive and prevent execution of the target
-/// and concurrent modification of its bytes or page permissions until return.
-/// Neither input slice may borrow bytes in the destination range.
+/// Keep the memory mapped. No other code may run or change these bytes or their
+/// page permissions during the write. Input slices must not borrow the target bytes.
 pub(crate) unsafe fn write(
     address: usize,
     expected: &[u8],
     replacement: &[u8],
 ) -> Result<(), Error> {
-    // SAFETY: The caller provides the transaction's mapping and quiescence guarantees.
+    // SAFETY: The caller meets the mapping and access rules above.
     unsafe { replace(address, expected, replacement, std::process::abort) }
 }
 
@@ -120,7 +119,7 @@ unsafe fn replace(
         }
     }
 
-    // SAFETY: All covered pages are writable and the caller guarantees exclusivity.
+    // SAFETY: The pages are writable and only this call can change them.
     unsafe { std::ptr::copy(replacement.as_ptr(), address as *mut u8, replacement.len()) };
     let result = platform::flush(address, replacement.len()).and_then(|()| {
         pages
@@ -133,8 +132,7 @@ unsafe fn replace(
                 fatal();
             }
         }
-        // SAFETY: The complete destination was made writable again above; the
-        // independently owned snapshot cannot overlap the destination.
+        // SAFETY: The pages are writable again. The saved bytes are in a separate buffer.
         unsafe {
             std::ptr::copy_nonoverlapping(original.as_ptr(), address as *mut u8, original.len())
         };

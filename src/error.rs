@@ -18,7 +18,7 @@ pub enum Error {
     SameAddress,
     /// This target overlaps an existing replacement.
     Overlap,
-    /// Too few complete instructions precede the end of the function.
+    /// The function ends before there is room for a jump.
     InsufficientSpace,
     /// The function prefix contains an invalid instruction.
     InvalidInstruction,
@@ -26,7 +26,7 @@ pub enum Error {
     Os {
         /// Name of the failed operation.
         operation: &'static str,
-        /// Native operating system error code.
+        /// OS error code.
         code: i32,
     },
     /// The operating system's memory map could not be read or parsed.

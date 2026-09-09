@@ -86,9 +86,9 @@ fn installation_errors_do_not_change_the_target() {
         replace!(session, original => original, fn(u64) -> u64),
         Err(Error::SameAddress)
     );
-    // SAFETY: deliberately invalid addresses are rejected by mapping validation before access.
+    // SAFETY: Address checks reject null before reading memory.
     assert!(unsafe { session.replace_raw(std::ptr::null(), replacement as *const ()) }.is_err());
-    // SAFETY: same as above, for the destination validation path.
+    // SAFETY: The null replacement is also rejected before access.
     assert!(unsafe { session.replace_raw(original as *const (), std::ptr::null()) }.is_err());
     replace!(session, original => replacement, fn(u64) -> u64).unwrap();
     assert_eq!(

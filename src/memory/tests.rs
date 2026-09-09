@@ -65,7 +65,7 @@ impl Allocation {
     fn new() -> Self {
         let page_size = platform::page_size().unwrap();
         #[cfg(target_os = "linux")]
-        // SAFETY: This creates a fresh anonymous allocation owned by this fixture.
+        // SAFETY: This test owns the new allocation.
         let address = unsafe {
             let pointer = libc::mmap(
                 std::ptr::null_mut(),
@@ -79,7 +79,7 @@ impl Allocation {
             pointer as usize
         };
         #[cfg(target_os = "windows")]
-        // SAFETY: This creates a fresh allocation owned by this fixture.
+        // SAFETY: This test owns the new allocation.
         let address = unsafe {
             use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, VirtualAlloc};
             let pointer = VirtualAlloc(
@@ -91,7 +91,7 @@ impl Allocation {
             assert!(!pointer.is_null());
             pointer as usize
         };
-        // SAFETY: All three owned pages are writable and do not alias any Rust object.
+        // SAFETY: These three writable pages contain no Rust objects.
         unsafe { std::ptr::write_bytes(address as *mut u8, 0x90, page_size * 3) };
         let allocation = Self { address, page_size };
         allocation.protect(0, RX);
@@ -102,7 +102,7 @@ impl Allocation {
     fn protect(&self, page: usize, protection: u32) {
         let address = self.address + page * self.page_size;
         #[cfg(target_os = "linux")]
-        // SAFETY: The fixture owns this complete aligned page.
+        // SAFETY: This test owns the whole aligned page.
         unsafe {
             assert_eq!(
                 libc::mprotect(address as *mut _, self.page_size, protection as i32),
@@ -110,7 +110,7 @@ impl Allocation {
             );
         }
         #[cfg(target_os = "windows")]
-        // SAFETY: The fixture owns this complete aligned page and `old` is valid output.
+        // SAFETY: This test owns the aligned page; old is valid output storage.
         unsafe {
             let mut old = 0;
             assert_ne!(
@@ -128,12 +128,12 @@ impl Allocation {
     fn hole(&self, page: usize) {
         let address = self.address + page * self.page_size;
         #[cfg(target_os = "linux")]
-        // SAFETY: The removed page belongs exclusively to this fixture.
+        // SAFETY: Only this test owns the page.
         unsafe {
             assert_eq!(libc::munmap(address as *mut _, self.page_size), 0);
         }
         #[cfg(target_os = "windows")]
-        // SAFETY: The decommitted page belongs exclusively to this fixture.
+        // SAFETY: Only this test owns the page.
         unsafe {
             use windows_sys::Win32::System::Memory::{MEM_DECOMMIT, VirtualFree};
             assert_ne!(
@@ -165,12 +165,12 @@ impl Allocation {
 impl Drop for Allocation {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
-        // SAFETY: The fixture owns this allocation; munmap permits already-unmapped holes.
+        // SAFETY: This test owns the allocation. munmap accepts holes.
         unsafe {
             assert_eq!(libc::munmap(self.address as *mut _, self.page_size * 3), 0);
         }
         #[cfg(target_os = "windows")]
-        // SAFETY: The fixture owns this reservation and no references survive it.
+        // SAFETY: This test owns the allocation; no references remain.
         unsafe {
             use windows_sys::Win32::System::Memory::{MEM_RELEASE, VirtualFree};
             assert_ne!(VirtualFree(self.address as *mut _, 0, MEM_RELEASE), 0);
@@ -206,7 +206,7 @@ fn reads_and_writes_respect_unmapped_holes() {
         Err(Error::InvalidAddress)
     ));
     assert!(matches!(
-        // SAFETY: This fixture owns the surviving mappings and no code executes in them.
+        // SAFETY: This test owns the remaining pages; no code runs in them.
         unsafe { write(address, &[0x90; 4], &[0xcc; 4]) },
         Err(Error::InvalidRange)
     ));
@@ -216,7 +216,7 @@ fn reads_and_writes_respect_unmapped_holes() {
 fn replacing_across_pages_restores_each_original_protection() {
     let memory = Allocation::new();
     let address = memory.address + memory.page_size - 2;
-    // SAFETY: These fixture mappings are exclusive and never executed concurrently.
+    // SAFETY: Only this test uses these pages; no code runs in them.
     unsafe { write(address, &[0x90; 6], &[1, 2, 3, 4, 5, 6]) }.unwrap();
     assert_eq!(read(address, 6).unwrap(), [1, 2, 3, 4, 5, 6]);
     assert_eq!(
@@ -233,7 +233,7 @@ fn replacing_across_pages_restores_each_original_protection() {
             .protection,
         RWX
     );
-    // SAFETY: The same exclusive owned mapping remains alive for this restoration.
+    // SAFETY: The pages are still mapped and unused by other code.
     unsafe { write(address, &[1, 2, 3, 4, 5, 6], &[0x90; 6]) }.unwrap();
     memory.assert_unchanged(address, 6);
 }
@@ -241,7 +241,7 @@ fn replacing_across_pages_restores_each_original_protection() {
 #[test]
 fn failed_validation_never_changes_memory() {
     let memory = Allocation::new();
-    // SAFETY: The owned mapping is exclusive; invalid values must be rejected before access.
+    // SAFETY: Only this test uses the pages. Invalid ranges are rejected before access.
     unsafe {
         assert!(matches!(
             write(memory.address, &[0x90], &[]),
@@ -274,7 +274,7 @@ fn errors_before_modification_leave_bytes_and_permissions_unchanged() {
     for operation in ["query memory", "read memory", "protect memory"] {
         let injection = Inject::new(&[(operation, 1)]);
         assert!(
-            // SAFETY: The fixture exclusively owns the mapping; faults occur before mutation.
+            // SAFETY: This test owns the pages; the injected error occurs before writing.
             unsafe { write(memory.address, &[0x90; 4], &[0xcc; 4]) }.is_err(),
             "{operation}"
         );
@@ -285,7 +285,7 @@ fn errors_before_modification_leave_bytes_and_permissions_unchanged() {
     {
         let injection = Inject::new(&[("page size", 1)]);
         assert!(matches!(
-            // SAFETY: The fixture owns this mapping and the failure precedes mutation.
+            // SAFETY: This test owns the pages; the injected error occurs before writing.
             unsafe { write(memory.address, &[0x90], &[0xcc]) },
             Err(Error::Os {
                 operation: "page size",
@@ -303,7 +303,7 @@ fn partial_permission_change_failure_rolls_back_changed_pages() {
     let address = memory.address + memory.page_size - 2;
     let injection = Inject::new(&[("protect memory", 2)]);
     assert!(matches!(
-        // SAFETY: The fixture exclusively owns both pages and does not execute their contents.
+        // SAFETY: This test owns both pages; no code runs in them.
         unsafe { write(address, &[0x90; 4], &[0xcc; 4]) },
         Err(Error::Os {
             operation: "protect memory",
@@ -325,7 +325,7 @@ fn failures_after_copy_roll_back_bytes_and_permissions() {
     ] {
         let injection = Inject::new(&[failure]);
         assert!(
-            // SAFETY: The fixture owns both pages and no threads execute their contents.
+            // SAFETY: This test owns both pages; no code runs in them.
             unsafe { write(address, &[0x90; 4], &[0xcc; 4]) }.is_err(),
             "{failure:?}"
         );
@@ -343,7 +343,7 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     let _serial = crate::tests::serial();
     let memory = Allocation::new();
     memory.protect(0, RWX);
-    // SAFETY: The fixture owns this writable page, and no code can execute it yet.
+    // SAFETY: This test owns the writable page; no code runs in it.
     unsafe {
         for offset in [64, 128, 256] {
             *((memory.address + offset) as *mut u8) = 0xc3;
@@ -352,8 +352,8 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     memory.protect(0, RX);
     platform::flush(memory.address, 257).unwrap();
     let mut session = crate::Session::new().unwrap();
-    // SAFETY: These owned NOP/RET entries have the same void ABI, remain mapped,
-    // and cannot execute concurrently. Only the first replacement is installed.
+    // SAFETY: Both NOP/RET functions use the same void ABI. This test owns their
+    // memory and keeps calls stopped while patching.
     unsafe {
         session.replace_raw(
             (memory.address + 4) as *const (),
@@ -363,8 +363,7 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     .unwrap();
     let installed = read(memory.address, 32).unwrap();
     assert!(matches!(
-        // SAFETY: Both owned entries remain live and quiescent; the overlapping
-        // source must be rejected before a second modification is made.
+        // SAFETY: Both entries stay mapped and idle. The overlap is rejected before writing.
         unsafe {
             session.replace_raw(
                 memory.address as *const (),
@@ -390,16 +389,15 @@ fn a_generated_cet_function_can_execute_replace_and_restore() {
     let mut code = [0x90; 26];
     code[..4].copy_from_slice(&[0xf3, 0x0f, 0x1e, 0xfa]);
     code[20..].copy_from_slice(&[0xb8, 7, 0, 0, 0, 0xc3]);
-    // SAFETY: This fixture exclusively owns the target page and does not execute
-    // its initial NOP bytes; code remains allocated through the session below.
+    // SAFETY: This test owns the page and keeps it mapped through the session.
+    // No code runs there during this write.
     unsafe { write(memory.address, &[0x90; 26], &code) }.unwrap();
-    // SAFETY: The bytes encode ENDBR64, NOP padding, MOV EAX,7, RET. This is a
-    // complete leaf extern C function with no arguments and a u32 return value.
+    // SAFETY: ENDBR64, NOPs, MOV EAX,7, RET form an extern C fn() -> u32.
     let source: extern "C" fn() -> u32 = unsafe { std::mem::transmute(memory.address) };
     assert_eq!(source(), 7);
     let mut session = crate::Session::new().unwrap();
-    // SAFETY: Both functions have identical ABIs and lifetimes; only this thread
-    // has access to the generated entry, and it is idle during installation.
+    // SAFETY: Both functions match in ABI and lifetime. Only this thread can call
+    // the generated function, and calls are stopped while patching.
     unsafe { session.replace_raw(source as *const (), native_replacement as *const ()) }.unwrap();
     assert_eq!(source(), 93);
     assert_eq!(read(memory.address, 4).unwrap(), [0xf3, 0x0f, 0x1e, 0xfa]);
@@ -422,8 +420,8 @@ fn irrecoverable_rollbacks_invoke_the_fatal_policy() {
         let memory = Allocation::new();
         let injection = Inject::new(&failures);
         let result = std::panic::catch_unwind(|| {
-            // SAFETY: Fixture ownership satisfies the transaction requirements;
-            // the test fatal policy unwinds only so the fixture can release its allocation.
+            // SAFETY: Only this test uses the mapped pages. The test abort handler
+            // panics so the allocation can be freed afterward.
             unsafe {
                 replace(
                     memory.address + memory.page_size - 2,

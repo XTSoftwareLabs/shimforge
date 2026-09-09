@@ -18,7 +18,7 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
     if source == target {
         return Err(Error::SameAddress);
     }
-    // Keep an existing CET indirect-branch landing pad intact.
+    // Preserve the ENDBR64 entry used by CET.
     let offset = if bytes.starts_with(&ENDBR64) { 4 } else { 0 };
     let address = source.checked_add(offset).ok_or(Error::InvalidRange)?;
     let mut replacement = jump(address, target)?;
@@ -34,7 +34,7 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
             return Err(Error::InvalidInstruction);
         }
         length += instruction.len();
-        // Do not walk past a return, tail jump, trap, or exception into the next symbol.
+        // Stop at a return, tail jump, or trap to avoid the next function.
         let terminal = matches!(
             instruction.flow_control(),
             FlowControl::Return
@@ -65,7 +65,7 @@ fn jump(source: usize, target: usize) -> Result<Vec<u8>, Error> {
         bytes.extend_from_slice(&relative.to_le_bytes());
         Ok(bytes)
     } else {
-        // RIP-relative indirect jump: no argument or scratch registers are clobbered.
+        // RIP-relative jump leaves all registers unchanged.
         let mut bytes = vec![0xff, 0x25, 0, 0, 0, 0];
         bytes.extend_from_slice(&(target as u64).to_le_bytes());
         Ok(bytes)

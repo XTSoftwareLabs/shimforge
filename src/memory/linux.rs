@@ -67,8 +67,7 @@ pub(super) fn read_bytes(address: usize, length: usize) -> Result<Vec<u8>, Error
         iov_base: address as *mut libc::c_void,
         iov_len: length,
     };
-    // SAFETY: `local` describes the owned output buffer. The kernel validates
-    // the remote address, so invalid or concurrently unmapped input cannot fault us.
+    // SAFETY: local points to the output buffer. The kernel checks the source address.
     let copied = syscall("read memory", -1, || unsafe {
         libc::process_vm_readv(libc::getpid(), &local, 1, &remote, 1, 0)
     });
@@ -80,7 +79,7 @@ pub(super) fn read_bytes(address: usize, length: usize) -> Result<Vec<u8>, Error
 }
 
 pub(super) fn page_size() -> Result<usize, Error> {
-    // SAFETY: `sysconf` takes a constant selector and does not access Rust memory.
+    // SAFETY: sysconf reads a system setting and takes no pointers.
     let size = syscall("page size", -1, || unsafe {
         libc::sysconf(libc::_SC_PAGESIZE)
     });
@@ -89,8 +88,7 @@ pub(super) fn page_size() -> Result<usize, Error> {
 
 pub(super) fn protect(page: PageRange, writable: bool) -> Result<(), Error> {
     let protection = page.protection as i32 | if writable { libc::PROT_WRITE } else { 0 };
-    // SAFETY: The caller supplies page-aligned mapped ranges kept alive throughout
-    // the transaction; permissions come from this process's mapping snapshot.
+    // SAFETY: The caller keeps these aligned pages mapped. Permissions came from /proc.
     let result = syscall("protect memory", -1, || unsafe {
         libc::mprotect(page.address as *mut libc::c_void, page.length, protection)
     });
@@ -108,8 +106,7 @@ pub(super) fn flush(_address: usize, _length: usize) -> Result<(), Error> {
             code: libc::EIO,
         });
     }
-    // x86-64 maintains coherent instruction and data caches. Callers additionally
-    // guarantee quiescence while instructions and page permissions are changed.
+    // x86-64 keeps code and data caches in sync. Target calls are stopped during writes.
     std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }

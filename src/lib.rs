@@ -27,11 +27,11 @@ struct Patch {
     replacement: Vec<u8>,
 }
 
-/// An exclusive scope for process-wide function replacements.
+/// A scope for function replacements that affect all threads.
 ///
-/// All replacements are restored in reverse order when the session is dropped,
-/// including during unwinding. A session cannot move to another thread.
-#[must_use = "keep the session alive while exercising the replacements"]
+/// Drop restores replacements in reverse order, including during a panic.
+/// A session cannot move to another thread.
+#[must_use = "keep the session alive while using the mocks"]
 pub struct Session {
     patches: Vec<Patch>,
     _lock: MutexGuard<'static, ()>,
@@ -40,7 +40,7 @@ pub struct Session {
 impl Session {
     /// Opens a session, or returns [`Error::Busy`] without blocking.
     ///
-    /// A session serializes other shimforge sessions, not calls to target functions.
+    /// Only one session can be active. Its lock does not stop function calls.
     pub fn new() -> Result<Self, Error> {
         let lock = match SESSION.try_lock() {
             Ok(lock) => lock,
@@ -59,14 +59,13 @@ impl Session {
     ///
     /// # Safety
     ///
-    /// Both pointers must be live function entry points with exactly compatible
-    /// signatures, ABIs, and lifetime requirements for **every** call to the source.
-    /// Their code and mappings must remain live and unchanged until restoration.
-    /// No thread may execute the overwritten prefix during installation or
-    /// restoration (including session drop). No branch may enter the middle of
-    /// that prefix. The source must have a distinct, non-inlined entry point.
-    /// Do not replace functions used by shimforge, its allocator, or OS backend.
-    /// Replacement effects must respect any invariants required by source callers.
+    /// Both pointers must name live functions with matching signatures, ABIs,
+    /// and lifetimes for every caller. Keep their code loaded and unchanged
+    /// until restored. No thread may run the patched bytes during installation
+    /// or restoration, including drop. No branch may enter those bytes midway.
+    /// The source must have a distinct entry point and must not be inlined.
+    /// Do not replace functions used by shimforge or its memory and OS code.
+    /// The replacement must meet the safety rules its callers rely on.
     pub unsafe fn replace_raw(
         &mut self,
         source: *const (),
@@ -77,7 +76,7 @@ impl Session {
         if source == target {
             return Err(Error::SameAddress);
         }
-        // Reject aliases and replacement cycles before inspecting patched instructions.
+        // Check for aliases and cycles before decoding patched bytes.
         if self.patches.iter().any(|patch| {
             let end = patch.address + patch.original.len();
             (patch.entry <= source && source < end) || (patch.entry <= target && target < end)
@@ -98,9 +97,9 @@ impl Session {
         {
             return Err(Error::Overlap);
         }
-        // Allocate all ownership bookkeeping before changing executable memory.
+        // Reserve space before changing code so push cannot allocate.
         self.patches.reserve(1);
-        // SAFETY: the caller guarantees quiescence and the validity of these functions.
+        // SAFETY: the caller keeps both functions loaded and idle during the write.
         unsafe {
             memory::write(address, &plan.original, &plan.replacement)?;
         }
@@ -115,11 +114,11 @@ impl Session {
 
     /// Restores all replacements, newest first. Safe to call repeatedly.
     ///
-    /// The quiescence requirements of [`Self::replace_raw`] still apply. On error,
-    /// the affected replacement remains tracked so restoration can be retried.
+    /// Keep target calls stopped as required by [`Self::replace_raw`]. On error,
+    /// the patch stays in the session so you can retry.
     pub fn restore(&mut self) -> Result<(), Error> {
         while let Some(patch) = self.patches.last() {
-            // SAFETY: installation's contract extends through restoration and drop.
+            // SAFETY: replace_raw requires the target to stay loaded and idle here.
             unsafe {
                 memory::write(patch.address, &patch.replacement, &patch.original)?;
             }
@@ -137,12 +136,12 @@ impl Drop for Session {
 
 fn finish(result: Result<(), Error>, fatal: fn() -> !) {
     if result.is_err() {
-        // Continuing could execute a stale replacement. Never panic during unwinding.
+        // Abort if a patch cannot be removed, even during a panic.
         fatal();
     }
 }
 
-/// Replaces a function using an explicit, compiler-checked function pointer type.
+/// Replaces a function and checks its signature at compile time.
 ///
 /// ```no_run
 /// # fn original(x: i32) -> i32 { x + 1 }
@@ -152,10 +151,8 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// # Ok::<(), shimforge::Error>(())
 /// ```
 ///
-/// Low-level memory operations are encapsulated by this macro. The runtime
-/// requirements in the crate documentation still apply. A narrower lifetime
-/// annotation must not be used to make an incompatible replacement compile.
-/// Non-capturing closures are accepted.
+/// No `unsafe` block is needed. Follow the crate's safety rules. Do not narrow
+/// lifetimes to force a type match. Closures without captures are accepted.
 ///
 /// Incompatible signatures are rejected:
 /// ```compile_fail
@@ -163,7 +160,7 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x: u64| x, fn(u32) -> u32);
 /// ```
-/// Capturing closures cannot outlive their captured state through a code patch:
+/// Capturing closures are rejected:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new().unwrap();
 /// let captured = String::from("hello");
@@ -177,7 +174,7 @@ macro_rules! replace {
         let source: $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)? = $source;
         let target: $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)? = $target;
         let session = &mut $session;
-        // SAFETY: signatures are checked above; runtime requirements are documented.
+        // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
@@ -185,7 +182,7 @@ macro_rules! replace {
         let source: $(for<$($lt),+>)? unsafe fn($($arg),*) $(-> $ret)? = $source;
         let target: $(for<$($lt),+>)? unsafe fn($($arg),*) $(-> $ret)? = $target;
         let session = &mut $session;
-        // SAFETY: signatures are checked above; runtime requirements are documented.
+        // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
@@ -193,7 +190,7 @@ macro_rules! replace {
         let source: $(for<$($lt),+>)? extern $abi fn($($arg),*) $(-> $ret)? = $source;
         let target: $(for<$($lt),+>)? extern $abi fn($($arg),*) $(-> $ret)? = $target;
         let session = &mut $session;
-        // SAFETY: signatures are checked above; runtime requirements are documented.
+        // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
     ($session:expr, $source:expr => $target:expr,
@@ -201,7 +198,7 @@ macro_rules! replace {
         let source: $(for<$($lt),+>)? unsafe extern $abi fn($($arg),*) $(-> $ret)? = $source;
         let target: $(for<$($lt),+>)? unsafe extern $abi fn($($arg),*) $(-> $ret)? = $target;
         let session = &mut $session;
-        // SAFETY: signatures are checked above; runtime requirements are documented.
+        // SAFETY: types are checked above; callers must follow the runtime safety rules.
         unsafe { session.replace_raw(source as *const (), target as *const ()) }
     }};
 }
