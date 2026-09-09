@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Requires rustfmt, clippy, llvm-tools-preview, and cargo-llvm-cov 0.8.7.
+set -euo pipefail
+
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+cargo fmt --all --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked -- --test-threads=1
+
+mkdir -p coverage/linux
+cargo llvm-cov --all-targets --locked \
+    --ignore-filename-regex '(^|[/\\])tests([/\\]|\.rs$)' \
+    --fail-under-lines 100 --fail-under-functions 100 \
+    --lcov --output-path coverage/linux/lcov.info \
+    -- --test-threads=1
