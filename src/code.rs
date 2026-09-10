@@ -1,6 +1,9 @@
 use crate::Error;
 
 mod prefix;
+mod relocate;
+
+pub(crate) use relocate::trampoline;
 
 pub(crate) const MAX_PREFIX: usize = 32;
 const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];

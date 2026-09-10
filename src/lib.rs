@@ -10,8 +10,10 @@ compile_error!("shimforge supports only Windows x86-64 and Linux x86-64");
 mod asynchronous;
 mod code;
 mod error;
+mod executable;
 mod expectation;
 mod memory;
+mod routing;
 
 #[cfg(test)]
 mod tests;
@@ -26,11 +28,32 @@ pub use shimforge_macros::{__check_signature, __mock};
 #[doc(hidden)]
 pub mod __private {
     pub use crate::expectation::{CallGuard, Config, Control, Meta, Rule, State, lock};
+    pub use crate::routing::route;
 }
 
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::cell::Cell;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::thread::ThreadId;
 
-static SESSION: Mutex<()> = Mutex::new(());
+static SESSION: RwLock<()> = RwLock::new(());
+thread_local! { static LOCAL_ACTIVE: Cell<bool> = const { Cell::new(false) }; }
+
+enum SessionLock {
+    Global {
+        _guard: RwLockWriteGuard<'static, ()>,
+    },
+    Local {
+        _guard: RwLockReadGuard<'static, ()>,
+    },
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        if matches!(self, Self::Local { .. }) {
+            LOCAL_ACTIVE.set(false);
+        }
+    }
+}
 
 struct Patch {
     entry: usize,
@@ -51,7 +74,7 @@ impl Drop for OwnedMock {
     }
 }
 
-/// A scope for function replacements that affect all threads.
+/// A scope for global or thread-local function mocks.
 ///
 /// Drop restores replacements in reverse order, including during a panic.
 /// A session cannot move to another thread.
@@ -59,7 +82,8 @@ impl Drop for OwnedMock {
 pub struct Session {
     patches: Vec<Patch>,
     mocks: Vec<OwnedMock>,
-    _lock: MutexGuard<'static, ()>,
+    local_patches: Vec<usize>,
+    lock: SessionLock,
 }
 
 impl Session {
@@ -72,7 +96,13 @@ impl Session {
     ///
     /// Only one session can be active. Its lock does not stop function calls.
     pub fn new() -> Result<Self, Error> {
-        let lock = match SESSION.try_lock() {
+        Self::new_global()
+    }
+
+    /// Opens a global session. Mocks affect all threads.
+    /// Returns [`Error::Busy`] while any other session is active.
+    pub fn new_global() -> Result<Self, Error> {
+        let guard = match SESSION.try_write() {
             Ok(lock) => lock,
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             Err(TryLockError::WouldBlock) => return Err(Error::Busy),
@@ -80,8 +110,36 @@ impl Session {
         Ok(Self {
             patches: Vec::new(),
             mocks: Vec::new(),
-            _lock: lock,
+            local_patches: Vec::new(),
+            lock: SessionLock::Global { _guard: guard },
         })
+    }
+
+    /// Opens a session whose mocks affect only the current thread.
+    /// Other threads keep their own mocks or call the original function.
+    /// Only one local session may be active per thread. Global sessions exclude
+    /// local sessions. Stop target calls during first installation and final restoration.
+    pub fn new_local() -> Result<Self, Error> {
+        if LOCAL_ACTIVE.get() {
+            return Err(Error::Busy);
+        }
+        let guard = match SESSION.try_read() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return Err(Error::Busy),
+        };
+        LOCAL_ACTIVE.set(true);
+        Ok(Self {
+            patches: Vec::new(),
+            mocks: Vec::new(),
+            local_patches: Vec::new(),
+            lock: SessionLock::Local { _guard: guard },
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn __thread(&self) -> Option<ThreadId> {
+        matches!(self.lock, SessionLock::Local { .. }).then(|| std::thread::current().id())
     }
 
     /// Installs a replacement at a raw function entry point.
@@ -102,6 +160,11 @@ impl Session {
         source: *const (),
         target: *const (),
     ) -> Result<(), Error> {
+        if self.__thread().is_some() {
+            return Err(Error::Expectation(
+                "use mock! or mock_async in a local session".into(),
+            ));
+        }
         let source = source as usize;
         let target = target as usize;
         if source == target {
@@ -168,7 +231,13 @@ impl Session {
         self.mocks.reserve(1);
         // SAFETY: the caller provides matching functions and keeps them idle.
         unsafe {
-            self.replace_raw(source, target)?;
+            if self.__thread().is_some() {
+                self.local_patches.reserve(1);
+                routing::install(source as usize, target as usize)?;
+                self.local_patches.push(source as usize);
+            } else {
+                self.replace_raw(source, target)?;
+            }
         }
         self.mocks.push(mock);
         Ok(())
@@ -191,6 +260,11 @@ impl Session {
     }
 
     fn restore_patches(&mut self) -> Result<(), Error> {
+        while let Some(source) = self.local_patches.last() {
+            // SAFETY: callers stop target calls before final restoration.
+            unsafe { routing::remove(*source)? };
+            self.local_patches.pop();
+        }
         while let Some(patch) = self.patches.last() {
             // SAFETY: replace_raw requires the target to stay loaded and idle here.
             unsafe {
@@ -298,6 +372,18 @@ impl Drop for Session {
 #[macro_export]
 macro_rules! mock {
     ($($input:tt)*) => { $crate::__mock!($crate, $($input)*) };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __invoke {
+    ($address:expr, $signature:ty, ($($argument:ident),* $(,)?)) => {{
+        let address = $address;
+        // SAFETY: routing stores only targets with this checked signature.
+        #[allow(clippy::type_complexity)]
+        let function: $signature = unsafe { ::std::mem::transmute(address) };
+        function($($argument),*)
+    }};
 }
 
 #[doc(hidden)]

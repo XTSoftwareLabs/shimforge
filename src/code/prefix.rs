@@ -2,7 +2,23 @@ use crate::Error;
 
 // Only size known x86-64 entry instructions. Unknown forms are rejected.
 pub(super) fn instruction(bytes: &[u8]) -> Result<(usize, bool), Error> {
-    let mut reader = Reader { bytes, offset: 0 };
+    let decoded = decode(bytes)?;
+    Ok((decoded.size, decoded.terminal))
+}
+
+pub(super) struct Instruction {
+    pub size: usize,
+    pub terminal: bool,
+    pub relative_memory: Option<usize>,
+    pub cannot_move: bool,
+}
+
+pub(super) fn decode(bytes: &[u8]) -> Result<Instruction, Error> {
+    let mut reader = Reader {
+        bytes,
+        offset: 0,
+        relative_memory: None,
+    };
     let mut word = false;
     let mut rex = 0;
     let mut address32 = false;
@@ -24,6 +40,7 @@ pub(super) fn instruction(bytes: &[u8]) -> Result<(usize, bool), Error> {
     };
     let immediate = if word && rex & 8 == 0 { 2 } else { 4 };
     let mut terminal = false;
+    let mut cannot_move = false;
     match opcode {
         0x50..=0x5f | 0x90..=0x99 | 0x9c | 0x9d | 0xc9 | 0xfc | 0xfd => {}
         0xc3 | 0xcb | 0xcc | 0xcf | 0xf1 | 0xf4 => terminal = true,
@@ -34,13 +51,22 @@ pub(super) fn instruction(bytes: &[u8]) -> Result<(usize, bool), Error> {
         0xcd | 0xeb => {
             reader.skip(1)?;
             terminal = true;
+            cannot_move = true;
         }
         0xe9 => {
             reader.skip(4)?;
             terminal = true;
+            cannot_move = true;
         }
-        0xe8 => reader.skip(4)?,
-        0x6a | 0x70..=0x7f | 0xb0..=0xb7 | 0xe0..=0xe3 | 0xa8 => reader.skip(1)?,
+        0xe8 => {
+            reader.skip(4)?;
+            cannot_move = true;
+        }
+        0x70..=0x7f | 0xe0..=0xe3 => {
+            reader.skip(1)?;
+            cannot_move = true;
+        }
+        0x6a | 0xb0..=0xb7 | 0xa8 => reader.skip(1)?,
         0x68 => reader.skip(immediate)?,
         0xb8..=0xbf => reader.skip(if rex & 8 != 0 { 8 } else { immediate })?,
         0xa0..=0xa3 => reader.skip(if address32 { 4 } else { 8 })?,
@@ -88,6 +114,7 @@ pub(super) fn instruction(bytes: &[u8]) -> Result<(usize, bool), Error> {
                 return Err(Error::InvalidInstruction);
             }
             terminal = opcode == 0xff && group == 4;
+            cannot_move = opcode == 0xff && matches!(group, 2 | 4);
         }
         0x0f => match reader.byte()? {
             0x0b => terminal = true,
@@ -113,18 +140,27 @@ pub(super) fn instruction(bytes: &[u8]) -> Result<(usize, bool), Error> {
             | 0xef => {
                 reader.modrm()?;
             }
-            0x80..=0x8f => reader.skip(4)?,
+            0x80..=0x8f => {
+                reader.skip(4)?;
+                cannot_move = true;
+            }
             0xc8..=0xcf => {}
             _ => return Err(Error::InvalidInstruction),
         },
         _ => return Err(Error::InvalidInstruction),
     }
-    Ok((reader.offset, terminal))
+    Ok(Instruction {
+        size: reader.offset,
+        terminal,
+        relative_memory: reader.relative_memory,
+        cannot_move: cannot_move || (address32 && reader.relative_memory.is_some()),
+    })
 }
 
 struct Reader<'a> {
     bytes: &'a [u8],
     offset: usize,
+    relative_memory: Option<usize>,
 }
 
 impl Reader<'_> {
@@ -149,6 +185,9 @@ impl Reader<'_> {
         let base = byte & 7;
         if mode != 3 {
             let sib_base = if base == 4 { self.byte()? & 7 } else { base };
+            if mode == 0 && base == 5 {
+                self.relative_memory = Some(self.offset);
+            }
             let displacement = match mode {
                 0 if sib_base == 5 => 4,
                 1 => 1,

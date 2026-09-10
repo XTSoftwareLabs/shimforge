@@ -24,6 +24,33 @@ pub(super) fn should_fail(operation: &'static str) -> bool {
 
 struct Inject;
 
+#[test]
+fn local_installation_and_restoration_errors_can_be_retried() {
+    let _serial = crate::tests::serial();
+    fn value(seed: u64) -> u64 {
+        seed.wrapping_add(1)
+    }
+    let mut session = crate::Session::new_local().unwrap();
+    for failed in [true, false] {
+        let injection = failed.then(|| Inject::new(&[("protect memory", 1)]));
+        let result = crate::mock!(session, value, fn(u64) -> u64);
+        drop(injection);
+        if failed {
+            assert!(result.is_err());
+            assert_eq!(value(1), 2);
+        } else {
+            result.unwrap().expect().once().returns(40).unwrap();
+        }
+    }
+    {
+        let _injection = Inject::new(&[("protect memory", 1)]);
+        assert!(session.restore().is_err());
+    }
+    assert_eq!(value(1), 40);
+    session.restore().unwrap();
+    assert_eq!(value(1), 2);
+}
+
 impl Inject {
     fn new(failures: &[(&'static str, usize)]) -> Self {
         FAULTS.with(|faults| {

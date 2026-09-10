@@ -20,7 +20,7 @@ codegen-units = 1
 incremental = false
 ```
 
-Run tests that share mocks one at a time:
+Run tests that share global mocks one at a time:
 
 ```text
 cargo test -- --test-threads=1
@@ -268,10 +268,38 @@ are in [`tests/expectations.rs`](tests/expectations.rs),
 
 ## Session lifetime
 
+`Session::new()` and `Session::new_global()` create global mocks. These affect
+worker threads too. `Session::new_local()` creates mocks for the current thread;
+other threads use their own mocks or call the original function.
+
+```rust
+use shimforge::{mock, Session};
+
+fn count(seed: u64) -> u64 { seed.wrapping_add(1) }
+
+let mut session = Session::new_local().unwrap();
+let counts = mock!(session, count, fn(u64) -> u64).unwrap();
+counts.expect().once().returns(42).unwrap();
+assert_eq!(count(3), 42);
+let worker = std::thread::spawn(|| count(3));
+assert_eq!(worker.join().unwrap(), 4);
+session.restore().unwrap();
+assert_eq!(count(3), 4);
+```
+
+Local sessions may coexist on different threads, even for the same function.
+Each thread may hold one session. Global and local sessions cannot coexist;
+conflicts return `Error::Busy`. Local mode supports `mock!` and `mock_async`.
+Use a global session for `replace!` and `replace_raw`.
+
+Coordinate parallel tests so no thread calls a target during its first patch
+installation or final restoration. Local mode does not make these writes atomic.
+Saved code is kept until the last local session releases it. Entries containing
+calls, branches, or unsupported relocation forms are rejected in local mode.
+
 Keep the session alive while using the mock. Drop restores the original code,
 including during a panic. Drop also checks expectations, without raising a second
-panic during unwinding. Mocks affect all threads. Only one session can be active;
-another attempt returns `Error::Busy` without waiting. `session.restore()` removes
+panic during unwinding. `session.restore()` removes
 the mocks early and then checks expectations. Configure mocks and run checkpoints
 while target calls are stopped. Join workers before verification and restoration.
 

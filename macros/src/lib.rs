@@ -178,6 +178,9 @@ fn generate(input: Input) -> Tokens {
     let binder = &signature.lifetimes;
     let unsafety = &signature.unsafety;
     let abi = &signature.abi;
+    let mut callable = signature.clone();
+    callable.unsafety = None;
+    callable.lifetimes = None;
     let parameters = binder.as_ref().map(|binder| &binder.lifetimes);
     let generics = parameters.map(|parameters| quote!(<#parameters>));
     quote! {{
@@ -197,13 +200,20 @@ fn generate(input: Input) -> Tokens {
         }
 
         static __SHIMFORGE_SLOT: ::std::sync::Mutex<
-            ::std::option::Option<::std::sync::Arc<#root::__private::State<__ShimforgeRule>>>
-        > = ::std::sync::Mutex::new(::std::option::Option::None);
+            ::std::vec::Vec<(::std::option::Option<::std::thread::ThreadId>, ::std::sync::Arc<#root::__private::State<__ShimforgeRule>>)>
+        > = ::std::sync::Mutex::new(::std::vec::Vec::new());
 
         #[allow(clippy::too_many_arguments)]
         #abi fn __shimforge_call #generics (#(#names: #args),*) -> #output {
+            let address = __shimforge_call as *const () as usize;
+            if let ::std::option::Option::Some(target) = #root::__private::route(address) {
+                if target != address {
+                    return #root::__invoke!(target, #callable, (#(#names),*));
+                }
+            }
             let state = #root::__private::lock(&__SHIMFORGE_SLOT)
-                .as_ref().expect("mock is not active").clone();
+                .iter().find(|entry| entry.0.is_none() || entry.0 == ::std::option::Option::Some(::std::thread::current().id()))
+                .expect("mock is not active").1.clone();
             let _call = state.enter();
             let rule = state.select(&|rule| (rule.matcher)(#(&#names),*));
             let mut action = #root::__private::lock(&rule.action);
@@ -303,16 +313,18 @@ fn generate(input: Input) -> Tokens {
             let __shimforge_target: #signature = __shimforge_call;
             fn __shimforge_checked<T>(source: T, _: T) -> T { source }
             let __shimforge_source = __shimforge_checked(__shimforge_source, __shimforge_target);
+            let __shimforge_session = (#session).__borrow();
+            let __shimforge_thread = __shimforge_session.__thread();
             let __shimforge_state = #root::__private::State::new(::std::stringify!(#source));
             {
                 let mut __shimforge_slot = #root::__private::lock(&__SHIMFORGE_SLOT);
-                if __shimforge_slot.is_some() {
+                if __shimforge_slot.iter().any(|entry| entry.0 == __shimforge_thread) {
                     return ::std::result::Result::Err(#root::Error::Expectation("mock site is already active".into()));
                 }
-                *__shimforge_slot = ::std::option::Option::Some(__shimforge_state.clone());
+                __shimforge_slot.push((__shimforge_thread, __shimforge_state.clone()));
             }
-            let __shimforge_detach = ::std::boxed::Box::new(|| { *#root::__private::lock(&__SHIMFORGE_SLOT) = ::std::option::Option::None; });
-            #root::__install!(#session, __shimforge_source as *const (), __shimforge_target as *const (), __shimforge_state.clone(), __shimforge_detach)?;
+            let __shimforge_detach = ::std::boxed::Box::new(move || { #root::__private::lock(&__SHIMFORGE_SLOT).retain(|entry| entry.0 != __shimforge_thread); });
+            #root::__install!(__shimforge_session, __shimforge_source as *const (), __shimforge_target as *const (), __shimforge_state.clone(), __shimforge_detach)?;
             ::std::result::Result::Ok(__ShimforgeMock { state: __shimforge_state })
         })()
     }}

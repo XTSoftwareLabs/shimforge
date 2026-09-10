@@ -1,4 +1,29 @@
 use super::*;
+use std::sync::{Mutex, MutexGuard};
+
+#[test]
+fn local_sessions_recover_from_global_poison_and_reject_raw_replacement() {
+    let _serial = serial();
+    let _ = std::panic::catch_unwind(|| {
+        let mut session = Session::new_global().unwrap();
+        let mock = crate::mock!(session, original, fn(u64) -> u64).unwrap();
+        mock.expect().returns(4).unwrap();
+        assert!(matches!(Session::new_local(), Err(Error::Busy)));
+        panic!("poison the writer");
+    });
+    let mut session = Session::new_local().unwrap();
+    assert!(matches!(Session::new_local(), Err(Error::Busy)));
+    // SAFETY: valid pointers; local mode rejects raw installation before access.
+    let result = unsafe { session.replace_raw(original as *const (), replacement as *const ()) };
+    assert!(result.is_err());
+    drop(session);
+    let result = std::panic::catch_unwind(|| {
+        let mut session = Session::new_local().unwrap();
+        let mock = crate::mock!(session, original, fn(u64) -> u64).unwrap();
+        mock.expect().once().returns(2).unwrap();
+    });
+    assert!(result.is_err());
+}
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
