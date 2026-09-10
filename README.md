@@ -194,10 +194,77 @@ Arguments stored inside a native future cannot be matched, and its mock always
 returns `Ready`. For functions that already return boxed futures, `mock!` can
 match arguments and return a custom future, including one that yields `Pending`.
 
+## Boxed async methods
+
+Mock the method that creates a boxed future. Passing a boxed trait object to
+`mock_async` would mock its shared poll wrapper, including unrelated methods.
+This client test checks the request without opening a connection.
+
+```rust
+use shimforge::{mock, Session};
+use std::{future::Future, io::{self, Read, Write}, net::TcpStream,
+    pin::Pin, task::{Context, Poll, Waker}};
+
+type Response<'a> = Pin<Box<dyn Future<Output = io::Result<String>> + Send + 'a>>;
+struct Client { address: String }
+impl Client {
+    fn get<'a>(&'a self, path: &'a str) -> Response<'a> {
+        Box::pin(async move {
+            let mut stream = TcpStream::connect(&self.address)?;
+            write!(stream, "GET {path} HTTP/1.0\r\nHost: {}\r\n\r\n", self.address)?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            Ok(response)
+        })
+    }
+    fn cached<'a>(&'a self, value: &'a str) -> Response<'a> {
+        Box::pin(async move { Ok(value.to_owned()) })
+    }
+}
+
+let client = Client { address: "127.0.0.1:9".into() };
+let mut session = Session::new().unwrap();
+let get = mock!(session, Client::get,
+    for<'a> fn(&'a Client, &'a str) -> Response<'a>).unwrap();
+get.expect().with(|_, path| *path == "/health").once()
+    .returning(|_, _| Box::pin(async { Ok("healthy".to_owned()) })).unwrap();
+
+let mut context = Context::from_waker(Waker::noop());
+let mut response = client.get("/health");
+assert!(matches!(response.as_mut().poll(&mut context),
+    Poll::Ready(Ok(value)) if value == "healthy"));
+let mut cached = client.cached("unchanged");
+assert!(matches!(cached.as_mut().poll(&mut context),
+    Poll::Ready(Ok(value)) if value == "unchanged"));
+session.verify().unwrap();
+```
+
+## Native functions
+
+`mock!` also accepts `unsafe fn`, `extern "C" fn`, and `extern "system" fn`
+signatures. Argument matching, counts, and captured callbacks work the same way.
+Installing the mock needs no `unsafe` block. Calling an unsafe target still does.
+A panic aborts the process when the declared ABI does not allow unwinding.
+
+```rust
+use shimforge::{mock, Session};
+
+extern "C" fn add(left: i64, right: i64) -> i64 { left + right }
+
+let mut session = Session::new().unwrap();
+let add_mock = mock!(session, add, extern "C" fn(i64, i64) -> i64).unwrap();
+add_mock.expect().with(|left, right| *left == 6 && *right == 7)
+    .once().returns(42).unwrap();
+assert_eq!(add(6, 7), 42);
+session.restore().unwrap();
+assert_eq!(add(6, 7), 13);
+```
+
 All Rust examples above run as doctests. None uses inline attributes. More cases
 are in [`tests/expectations.rs`](tests/expectations.rs),
 [`tests/async_expectations.rs`](tests/async_expectations.rs), and
-[`tests/io.rs`](tests/io.rs).
+[`tests/io.rs`](tests/io.rs). Imported OS calls are tested in
+[`tests/native_expectations.rs`](tests/native_expectations.rs).
 
 ## Session lifetime
 
@@ -223,6 +290,9 @@ does not stop function calls.
 Source and replacement must match in calling convention, argument and return
 layout, and lifetimes for every caller. Keep both functions loaded until restored.
 Do not mock memory allocation, locking, or OS functions that shimforge uses.
+Lifetime checks catch common mistakes in ordinary Rust functions. Generic
+instances, nested borrowed types, pre-cast pointers, and unsafe or native
+functions still need manual lifetime checks.
 
 The test profile above reduces inlining and other optimizations without source
 changes. It cannot undo calls already inlined in prebuilt libraries or separate

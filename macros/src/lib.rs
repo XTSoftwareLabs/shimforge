@@ -5,9 +5,61 @@ use syn::parse::{Parse, ParseStream};
 use syn::visit::Visit;
 use syn::{Expr, Path, ReturnType, Token, Type, TypeBareFn, parse_quote};
 
+mod signature;
+
 #[proc_macro]
 pub fn __mock(input: TokenStream) -> TokenStream {
     expand(syn::parse(input)).into()
+}
+
+#[proc_macro]
+pub fn __check_signature(input: TokenStream) -> TokenStream {
+    expand_check(syn::parse(input)).into()
+}
+
+fn expand_check(input: syn::Result<SignatureCheck>) -> Tokens {
+    match input {
+        Ok(check) => signature::check(
+            source_item(&check.source, &check.value),
+            &check.signature,
+            &check.target,
+        ),
+        Err(error) => error.into_compile_error(),
+    }
+}
+
+struct SignatureCheck {
+    source: Expr,
+    value: Expr,
+    target: Expr,
+    signature: TypeBareFn,
+}
+
+impl Parse for SignatureCheck {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let source = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let value = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let target = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let signature = input.parse()?;
+        Ok(Self {
+            source,
+            value,
+            target,
+            signature,
+        })
+    }
+}
+
+fn source_item<'a>(source: &'a Expr, value: &'a Expr) -> &'a Expr {
+    match source {
+        Expr::Path(_) => source,
+        Expr::Paren(paren) => source_item(&paren.expr, value),
+        Expr::Group(group) => source_item(&group.expr, value),
+        _ => value,
+    }
 }
 
 struct Input {
@@ -26,10 +78,10 @@ impl Parse for Input {
         let source = input.parse()?;
         input.parse::<Token![,]>()?;
         let signature: TypeBareFn = input.parse()?;
-        if signature.unsafety.is_some() || signature.abi.is_some() || signature.variadic.is_some() {
+        if signature.variadic.is_some() {
             return Err(syn::Error::new_spanned(
                 signature,
-                "mock! needs a safe Rust fn signature; use replace! for other calling conventions",
+                "mock! does not support variadic functions",
             ));
         }
         if input.peek(Token![,]) {
@@ -73,6 +125,12 @@ fn generate(input: Input) -> Tokens {
         signature,
     } = input;
     let args: Vec<_> = signature.inputs.iter().map(|arg| &arg.ty).collect();
+    let saved_source = parse_quote!(__shimforge_original);
+    let signature_check = signature::check(
+        source_item(&source, &saved_source),
+        &signature,
+        &parse_quote!(__shimforge_call),
+    );
     let names: Vec<_> = (0..args.len())
         .map(|index| format_ident!("__shimforge_arg_{index}"))
         .collect();
@@ -118,6 +176,8 @@ fn generate(input: Input) -> Tokens {
         }
     });
     let binder = &signature.lifetimes;
+    let unsafety = &signature.unsafety;
+    let abi = &signature.abi;
     let parameters = binder.as_ref().map(|binder| &binder.lifetimes);
     let generics = parameters.map(|parameters| quote!(<#parameters>));
     quote! {{
@@ -140,7 +200,8 @@ fn generate(input: Input) -> Tokens {
             ::std::option::Option<::std::sync::Arc<#root::__private::State<__ShimforgeRule>>>
         > = ::std::sync::Mutex::new(::std::option::Option::None);
 
-        fn __shimforge_call #generics (#(#names: #args),*) -> #output {
+        #[allow(clippy::too_many_arguments)]
+        #abi fn __shimforge_call #generics (#(#names: #args),*) -> #output {
             let state = #root::__private::lock(&__SHIMFORGE_SLOT)
                 .as_ref().expect("mock is not active").clone();
             let _call = state.enter();
@@ -235,7 +296,10 @@ fn generate(input: Input) -> Tokens {
         #constants
 
         (|| -> ::std::result::Result<__ShimforgeMock, #root::Error> {
-            let __shimforge_source = #source as fn(#(#infer),*) -> _;
+            let __shimforge_original = #source;
+            #signature_check
+            let __shimforge_source = __shimforge_original as #unsafety #abi fn(#(#infer),*) -> _;
+            #[allow(clippy::type_complexity)]
             let __shimforge_target: #signature = __shimforge_call;
             fn __shimforge_checked<T>(source: T, _: T) -> T { source }
             let __shimforge_source = __shimforge_checked(__shimforge_source, __shimforge_target);

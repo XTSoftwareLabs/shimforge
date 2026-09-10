@@ -724,3 +724,114 @@ fn macro_names_do_not_shadow_the_callers_session_or_types() {
     state.restore().unwrap();
     assert_eq!(price(1), 101);
 }
+
+fn static_length(value: &'static str) -> usize {
+    value.len() + 1
+}
+
+fn static_result(value: &str) -> &'static str {
+    if value.is_empty() { "empty" } else { "present" }
+}
+
+fn trim_left<'a>(left: &'a str, right: &str) -> &'a str {
+    &left[..right.len().min(left.len())]
+}
+
+#[test]
+fn independent_input_lifetimes_keep_their_output_link() {
+    let _serial = serial_test();
+    let mut session = Session::new().unwrap();
+    let trim = mock!(
+        session,
+        trim_left,
+        for<'a, 'b> fn(&'a str, &'b str) -> &'a str
+    )
+    .unwrap();
+    trim.expect().once().returning(|left, _| left).unwrap();
+    let left = String::from("left");
+    let result;
+    {
+        let right = String::from("r");
+        result = trim_left(&left, &right);
+    }
+    assert_eq!(result, "left");
+    session.restore().unwrap();
+}
+
+#[test]
+fn genuine_static_inputs_and_results_stay_supported() {
+    let _serial = serial_test();
+    let mut session = Session::new().unwrap();
+    let length = mock!(session, static_length, fn(&'static str) -> usize).unwrap();
+    let seen = Arc::new(Mutex::new(None));
+    let captured = seen.clone();
+    length
+        .expect()
+        .once()
+        .returning(move |value| {
+            *captured.lock().unwrap() = Some(value);
+            42
+        })
+        .unwrap();
+    let result = mock!(session, static_result, fn(&str) -> &'static str).unwrap();
+    result.expect().once().returns("mock").unwrap();
+    assert_eq!(static_length("saved"), 42);
+    assert_eq!(*seen.lock().unwrap(), Some("saved"));
+    assert_eq!(static_result(&String::from("input")), "mock");
+    session.restore().unwrap();
+}
+
+#[test]
+fn signature_checks_do_not_run_source_or_target_expressions() {
+    let _serial = serial_test();
+    let mut evaluated = 0;
+    let mut session = Session::new().unwrap();
+    let prices = mock!(
+        session,
+        {
+            evaluated += 1;
+            price
+        },
+        fn(u32) -> u64
+    )
+    .unwrap();
+    assert_eq!(evaluated, 1);
+    prices.expect().once().returns(7).unwrap();
+    assert_eq!(price(1), 7);
+    session.restore().unwrap();
+    replace!(session, { evaluated += 1; price } => { evaluated += 1; fixed_price },
+        fn(u32) -> u64)
+    .unwrap();
+    assert_eq!(evaluated, 3);
+    assert_eq!(price(1), 21);
+    session.restore().unwrap();
+}
+
+#[test]
+fn source_and_target_expressions_can_move_values_and_use_question_mark() -> Result<(), Error> {
+    let _serial = serial_test();
+    let mut session = Session::new()?;
+    let owned = String::from("source");
+    let prices = mock!(
+        session,
+        {
+            drop(owned);
+            price
+        },
+        fn(u32) -> u64
+    )?;
+    prices.expect().once().returns(9)?;
+    assert_eq!(price(1), 9);
+    session.restore()?;
+    let source: Result<fn(u32) -> u64, Error> = Ok(price);
+    let prices = mock!(session, source?, fn(u32) -> u64)?;
+    prices.expect().once().returns(10)?;
+    assert_eq!(price(1), 10);
+    session.restore()?;
+    let owned = String::from("replacement");
+    let target: Result<fn(u32) -> u64, Error> = Ok(fixed_price);
+    replace!(session, price => { drop(owned); target? }, fn(u32) -> u64)?;
+    assert_eq!(price(1), 21);
+    session.restore()?;
+    Ok(())
+}

@@ -42,6 +42,8 @@ impl Session {
     /// use the mock, including those created before this call. Their original
     /// bodies are not run. Join tasks before installing or restoring the mock.
     /// The future's layout and drop code stay unchanged.
+    /// Do not pass a boxed trait object: its poll wrapper is shared by unrelated
+    /// futures. Mock the method returning that box with [`crate::mock!`] instead.
     pub fn mock_async<F>(&mut self, witness: F) -> Result<AsyncMock<F::Output>, Error>
     where
         F: Future,

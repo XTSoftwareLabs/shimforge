@@ -304,6 +304,28 @@ fn replacement_preserves_integer_float_and_stack_arguments() {
     );
 }
 
+#[test]
+fn expectations_preserve_integer_float_and_stack_arguments() {
+    let _serial = serial_test();
+    let mut session = Session::new().unwrap();
+    let call = shimforge::mock!(
+        session,
+        many_arguments,
+        fn(u64, u64, u64, u64, u64, u64, u64, u64, f64, f64, f64, f64, f64) -> f64
+    )
+    .unwrap();
+    call.expect().once().returning(fake_many_arguments).unwrap();
+    assert_eq!(
+        many_arguments(1, 2, 3, 4, 5, 6, 7, 8, 0.5, 1.0, 1.5, 2.0, 2.5),
+        231.5
+    );
+    session.restore().unwrap();
+    assert_eq!(
+        many_arguments(1, 2, 3, 4, 5, 6, 7, 8, 0.5, 1.0, 1.5, 2.0, 2.5),
+        43.5
+    );
+}
+
 fn borrowed(value: &str) -> &str {
     &value[..1]
 }

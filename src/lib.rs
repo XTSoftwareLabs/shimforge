@@ -21,7 +21,7 @@ pub use error::Error;
 pub use expectation::{CallCount, Expectation, Sequence};
 
 #[doc(hidden)]
-pub use shimforge_macros::__mock;
+pub use shimforge_macros::{__check_signature, __mock};
 
 #[doc(hidden)]
 pub mod __private {
@@ -235,6 +235,37 @@ impl Drop for Session {
 /// fn source(value: u64) -> u64 { value }
 /// shimforge::mock!(session, source, fn(u32) -> u32);
 /// ```
+/// A replacement cannot require a longer input borrow:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: &str) -> usize { value.len() }
+/// shimforge::mock!(session, source, fn(&'static str) -> usize);
+/// ```
+/// Type aliases do not bypass this check:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: &str) -> usize { value.len() }
+/// type Input = &'static str;
+/// shimforge::mock!(session, source, fn(Input) -> usize);
+/// ```
+/// A static result cannot become a shorter borrow:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(_: &str) -> &'static str { "fixed" }
+/// shimforge::mock!(session, source, fn(&str) -> &str);
+/// ```
+/// A result must stay tied to the same argument:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
+/// shimforge::mock!(session, source, for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
+/// ```
+/// Caller names cannot shadow the checks:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn __target(_: &str) -> &'static str { "fixed" }
+/// shimforge::mock!(session, __target, fn(&str) -> &str);
+/// ```
 /// Captures must be safe to send between threads:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new().unwrap();
@@ -258,11 +289,11 @@ impl Drop for Session {
 /// let mock = shimforge::mock!(session, source, fn(&str) -> &str).unwrap();
 /// mock.expect().returning(|_| String::from("temporary").as_str());
 /// ```
-/// Use [`replace!`] for unsafe or native functions:
+/// Calling conventions must match:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new().unwrap();
 /// extern "C" fn source() -> usize { 1 }
-/// shimforge::mock!(session, source, extern "C" fn() -> usize);
+/// shimforge::mock!(session, source, fn() -> usize);
 /// ```
 #[macro_export]
 macro_rules! mock {
@@ -297,8 +328,9 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// # Ok::<(), shimforge::Error>(())
 /// ```
 ///
-/// No `unsafe` block is needed. Follow the crate's safety rules. Do not narrow
-/// lifetimes to force a type match. Closures without captures are accepted.
+/// No `unsafe` block is needed. Follow the crate's safety rules. Lifetime checks
+/// are best effort; do not narrow lifetimes to force a type match. Closures
+/// without captures are accepted.
 ///
 /// Incompatible signatures are rejected:
 /// ```compile_fail
@@ -311,6 +343,31 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// let mut session = shimforge::Session::new().unwrap();
 /// fn source(x: u64) -> u64 { x }
 /// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
+/// ```
+/// Input borrows cannot be narrowed:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: &str) -> usize { value.len() }
+/// shimforge::replace!(session, source => |value| value.len(), fn(&'static str) -> usize);
+/// ```
+/// This also applies to mutable borrows:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(value: &mut usize) { *value += 1; }
+/// shimforge::replace!(session, source => |_| (), fn(&'static mut usize));
+/// ```
+/// A static result cannot become a shorter borrow:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source(_: &str) -> &'static str { "fixed" }
+/// shimforge::replace!(session, source => |value| value, fn(&str) -> &str);
+/// ```
+/// A result must stay tied to the same argument:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new().unwrap();
+/// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
+/// shimforge::replace!(session, source => |_, right| right,
+///     for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
 /// ```
 /// Calling conventions must match:
 /// ```compile_fail
@@ -330,8 +387,10 @@ macro_rules! replace {
     (@infer $type:ty) => { _ };
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
-        let source = $source as fn($($crate::replace!(@infer $arg)),*) -> _;
+        let original = $source;
         let target: $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)? = $target;
+        $crate::__check_signature!($source, original, target, $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)?);
+        let source = original as fn($($crate::replace!(@infer $arg)),*) -> _;
         // Infer source lifetimes, then require matching pointer types.
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
