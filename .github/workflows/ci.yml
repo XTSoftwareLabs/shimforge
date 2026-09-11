@@ -59,6 +59,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: windows-2022
             target: x86_64-pc-windows-msvc
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -80,8 +82,8 @@ jobs:
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-llvm-cov@0.8.7
-      - name: Validate on Linux
-        if: runner.os == 'Linux'
+      - name: Validate on Unix
+        if: runner.os != 'Windows'
         run: bash scripts/verify.sh
       - name: Validate on Windows
         if: runner.os == 'Windows'

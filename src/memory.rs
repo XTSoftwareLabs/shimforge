@@ -6,6 +6,10 @@ use crate::Error;
 mod linux;
 #[cfg(target_os = "linux")]
 use linux as platform;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
@@ -161,6 +165,7 @@ fn syscall<T>(_operation: &'static str, _failure: T, call: impl FnOnce() -> T) -
     call()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn os_error(operation: &'static str) -> Error {
     Error::Os {
         operation,

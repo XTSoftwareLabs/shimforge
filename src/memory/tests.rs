@@ -88,13 +88,13 @@ struct Allocation {
     page_size: usize,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const RX: u32 = (libc::PROT_READ | libc::PROT_EXEC) as u32;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const RWX: u32 = (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) as u32;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const RO: u32 = libc::PROT_READ as u32;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const NONE: u32 = libc::PROT_NONE as u32;
 #[cfg(target_os = "windows")]
 const RX: u32 = 0x20;
@@ -108,7 +108,7 @@ const NONE: u32 = 0x01;
 impl Allocation {
     fn new() -> Self {
         let page_size = platform::page_size().unwrap();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         // SAFETY: This test owns the new allocation.
         let address = unsafe {
             let pointer = libc::mmap(
@@ -140,7 +140,7 @@ impl Allocation {
 
     fn protect(&self, page: usize, protection: u32) {
         let address = self.address + page * self.page_size;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         // SAFETY: This test owns the whole aligned page.
         unsafe {
             assert_eq!(
@@ -161,7 +161,7 @@ impl Allocation {
 
     fn hole(&self, page: usize) {
         let address = self.address + page * self.page_size;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         // SAFETY: Only this test owns the page.
         unsafe {
             assert_eq!(libc::munmap(address as *mut _, self.page_size), 0);
@@ -197,7 +197,7 @@ impl Allocation {
 
 impl Drop for Allocation {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         // SAFETY: This test owns the allocation. munmap accepts holes.
         unsafe {
             assert_eq!(libc::munmap(self.address as *mut _, self.page_size * 3), 0);
@@ -313,7 +313,7 @@ fn errors_before_modification_leave_bytes_and_permissions_unchanged() {
         drop(injection);
         memory.assert_unchanged(memory.address, 4);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let injection = Inject::new(&[("page size", 1)]);
         assert!(matches!(

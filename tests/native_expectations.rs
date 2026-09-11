@@ -93,7 +93,7 @@ fn native_panic_does_not_cross_the_abi_boundary() {
     assert!(error.contains("cannot unwind"), "{error}");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn imported_system_function_is_mocked_without_a_wrapper() {
     let _serial = serial();

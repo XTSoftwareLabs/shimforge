@@ -3,9 +3,9 @@
 
 #[cfg(not(all(
     target_arch = "x86_64",
-    any(target_os = "windows", target_os = "linux")
+    any(target_os = "windows", target_os = "linux", target_os = "macos")
 )))]
-compile_error!("shimforge supports only Windows x86-64 and Linux x86-64");
+compile_error!("shimforge supports Windows, Linux, and macOS on x86-64");
 
 mod asynchronous;
 mod code;

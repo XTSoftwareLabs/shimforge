@@ -1,9 +1,9 @@
 # shimforge
 
 Mock Rust functions without traits or dependency injection.
-Supports Windows x86-64 and Linux x86-64.
+Supports Windows, Linux, and macOS on x86-64. Apple Silicon is not supported.
 
-The only runtime crate dependency is `libc` on Linux. Macro generation uses
+The only runtime crate dependency is `libc` on Linux and macOS. Macro generation uses
 `syn`, `quote`, and `proc-macro2` at build time. The library currently uses `std`.
 
 ## Test configuration
@@ -329,6 +329,8 @@ Source and replacement must match in calling convention, argument and return
 layout, and lifetimes for every caller. Keep global replacements loaded until
 restored and locally patched functions loaded until process exit.
 Do not mock memory allocation, locking, or OS functions that shimforge uses.
+On macOS, use a normal test executable without Hardened Runtime. Shimforge does
+not change signing settings, entitlements, or system security settings.
 Lifetime checks catch common mistakes in ordinary Rust functions. Generic
 instances, nested borrowed types, pre-cast pointers, and unsafe or native
 functions still need manual lifetime checks.
@@ -350,8 +352,8 @@ MIT licensed.
 
 ## Contributing
 
-Run `./scripts/verify.ps1` on Windows or `bash scripts/verify.sh` on Linux.
+Run `./scripts/verify.ps1` on Windows or `bash scripts/verify.sh` on Linux or macOS.
 The checks require rustfmt, clippy, llvm-tools-preview, and cargo-llvm-cov 0.8.7.
 Use `./scripts/validate-docker.ps1` to run Linux checks in Docker.
-Both platforms require 100% line and function coverage of library code. Tests and
+All platforms require 100% line and function coverage of library code. Tests and
 dependencies are excluded. Reports are saved under `coverage/`.
