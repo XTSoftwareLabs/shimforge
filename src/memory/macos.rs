@@ -12,23 +12,32 @@ struct RegionInfo {
     protection: i32,
     max_protection: i32,
     inheritance: u32,
-    shared: u32,
-    reserved: u32,
     offset: u64,
+    user_tag: u32,
+    pages_resident: u32,
+    pages_shared: u32,
+    pages_swapped: u32,
+    pages_dirtied: u32,
+    references: u32,
+    shadow_depth: u16,
+    external_pager: u8,
+    share_mode: u8,
+    is_submap: u32,
     behavior: i32,
+    object_id: u32,
     wired: u16,
+    flags: u16,
 }
 
 unsafe extern "C" {
     static mach_task_self_: u32;
-    fn mach_vm_region(
+    fn mach_vm_region_recurse(
         task: u32,
         address: *mut u64,
         size: *mut u64,
-        flavor: i32,
+        depth: *mut u32,
         info: *mut i32,
         count: *mut u32,
-        object: *mut u32,
     ) -> i32;
     fn mach_vm_read_overwrite(
         task: u32,
@@ -38,46 +47,48 @@ unsafe extern "C" {
         copied: *mut u64,
     ) -> i32;
     fn mach_vm_protect(task: u32, address: u64, size: u64, maximum: u32, protection: i32) -> i32;
-    fn mach_port_deallocate(task: u32, name: u32) -> i32;
 }
 
 pub(super) fn region_at(address: usize) -> Result<Option<Region>, Error> {
-    let mut start = address as u64;
-    let mut size = 0;
-    let mut info = RegionInfo::default();
-    let mut count = (size_of::<RegionInfo>() / size_of::<i32>()) as u32;
-    let mut object = 0;
-    // SAFETY: all output pointers are valid and match VM_REGION_BASIC_INFO_64.
-    let result = syscall("query memory", FAILURE, || unsafe {
-        mach_vm_region(
-            mach_task_self_,
-            &mut start,
-            &mut size,
-            9,
-            (&raw mut info).cast(),
-            &mut count,
-            &mut object,
-        )
-    });
-    // SAFETY: this releases the returned right; a null name owns no right.
-    unsafe { mach_port_deallocate(mach_task_self_, object) };
-    if result == INVALID_ADDRESS {
-        return Ok(None);
+    let mut depth = 0u32;
+    loop {
+        let mut start = address as u64;
+        let mut size = 0;
+        let mut info = RegionInfo::default();
+        let mut count = (size_of::<RegionInfo>() / size_of::<i32>()) as u32;
+        // SAFETY: outputs match VM_REGION_SUBMAP_INFO_V0_COUNT_64 (16 words).
+        let result = syscall("query memory", FAILURE, || unsafe {
+            mach_vm_region_recurse(
+                mach_task_self_,
+                &mut start,
+                &mut size,
+                &mut depth,
+                (&raw mut info).cast(),
+                &mut count,
+            )
+        });
+        if result == INVALID_ADDRESS {
+            return Ok(None);
+        }
+        check("query memory", result)?;
+        if info.is_submap != 0 {
+            depth = depth.checked_add(1).ok_or(Error::InvalidRange)?;
+            continue;
+        }
+        let end = (start as usize)
+            .checked_add(size as usize)
+            .ok_or(Error::InvalidRange)?;
+        if start as usize > address || address >= end {
+            return Ok(None);
+        }
+        return Ok(Some(Region {
+            start: start as usize,
+            end,
+            protection: info.protection as u32,
+            readable: info.protection & libc::PROT_READ != 0,
+            executable: info.protection & libc::PROT_EXEC != 0,
+        }));
     }
-    check("query memory", result)?;
-    let end = (start as usize)
-        .checked_add(size as usize)
-        .ok_or(Error::InvalidRange)?;
-    if start as usize > address || address >= end {
-        return Ok(None);
-    }
-    Ok(Some(Region {
-        start: start as usize,
-        end,
-        protection: info.protection as u32,
-        readable: info.protection & libc::PROT_READ != 0,
-        executable: info.protection & libc::PROT_EXEC != 0,
-    }))
 }
 
 pub(super) fn read_bytes(address: usize, length: usize) -> Result<Vec<u8>, Error> {

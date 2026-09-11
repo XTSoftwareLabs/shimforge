@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn region_layout_matches_mach() {
-    assert_eq!(size_of::<RegionInfo>(), 36);
+    assert_eq!(size_of::<RegionInfo>(), 64);
     assert_eq!(align_of::<RegionInfo>(), 4);
     assert!(region_at(usize::MAX).unwrap().is_none());
     assert!(region_at(1).unwrap().is_none());
