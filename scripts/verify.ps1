@@ -19,6 +19,7 @@ try {
     Invoke-Cargo -CargoArguments @('fmt', '--all', '--check')
     Invoke-Cargo -CargoArguments @('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
     Invoke-Cargo -CargoArguments @('test', '--workspace', '--locked', '--', '--test-threads=1')
+    Invoke-Cargo -CargoArguments @('test', '--test', 'parallel', '--locked', '--', '--test-threads=8')
 
     New-Item -ItemType Directory -Path coverage/windows -Force | Out-Null
     Invoke-Cargo -CargoArguments @(

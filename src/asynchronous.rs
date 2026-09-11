@@ -1,14 +1,19 @@
 use crate::expectation::{Config, Control, Meta, Rule, State, lock};
 use crate::{CallCount, Error, Expectation, Sequence, Session};
 use std::any::Any;
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 type RegistryKey = (usize, Option<std::thread::ThreadId>);
-type RegistryEntry = (RegistryKey, Arc<dyn Any + Send + Sync>);
+type RegistryEntry = (usize, Arc<dyn Any + Send + Sync>);
 static REGISTRY: Mutex<Vec<RegistryEntry>> = Mutex::new(Vec::new());
+thread_local! {
+    static LOCAL_REGISTRY: RefCell<Vec<RegistryEntry>> = const { RefCell::new(Vec::new()) };
+}
+static GLOBAL_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct AsyncRule<R> {
     meta: Arc<Meta>,
@@ -70,51 +75,86 @@ impl Session {
 }
 
 fn register(key: RegistryKey, state: Arc<dyn Any + Send + Sync>) -> Result<(), Error> {
+    if key.1.is_some() {
+        return LOCAL_REGISTRY.with(|registry| insert(&mut registry.borrow_mut(), key.0, state));
+    }
     let mut registry = lock(&REGISTRY);
-    if registry.iter().any(|entry| entry.0 == key) {
+    insert(&mut registry, key.0, state)?;
+    GLOBAL_ACTIVE.store(true, std::sync::atomic::Ordering::Release);
+    Ok(())
+}
+
+fn insert(
+    registry: &mut Vec<RegistryEntry>,
+    address: usize,
+    state: Arc<dyn Any + Send + Sync>,
+) -> Result<(), Error> {
+    if registry.iter().any(|entry| entry.0 == address) {
         return Err(Error::Expectation("this future is already mocked".into()));
     }
-    registry.push((key, state));
+    registry.push((address, state));
     Ok(())
 }
 
 fn remove(key: RegistryKey) {
-    lock(&REGISTRY).retain(|entry| entry.0 != key);
+    if key.1.is_some() {
+        LOCAL_REGISTRY.with(|registry| registry.borrow_mut().retain(|entry| entry.0 != key.0));
+    } else {
+        let mut registry = lock(&REGISTRY);
+        registry.retain(|entry| entry.0 != key.0);
+        GLOBAL_ACTIVE.store(!registry.is_empty(), std::sync::atomic::Ordering::Release);
+    }
 }
 
-fn lookup<R: Send + 'static>(address: usize) -> Arc<State<AsyncRule<R>>> {
-    registered(address)
-        .downcast::<State<AsyncRule<R>>>()
-        .expect("async mock output type changed")
+fn lookup<R: Send + 'static>(address: usize) -> Option<Arc<State<AsyncRule<R>>>> {
+    registered(address).map(|state| {
+        state
+            .downcast::<State<AsyncRule<R>>>()
+            .expect("async mock output type changed")
+    })
 }
 
-fn registered(address: usize) -> Arc<dyn Any + Send + Sync> {
-    let registry = lock(&REGISTRY);
-    let state = &registry
-        .iter()
-        .find(|entry| {
-            entry.0.0 == address
-                && (entry.0.1.is_none() || entry.0.1 == Some(std::thread::current().id()))
+fn registered(address: usize) -> Option<Arc<dyn Any + Send + Sync>> {
+    let local = LOCAL_REGISTRY
+        .try_with(|registry| {
+            registry
+                .try_borrow()
+                .ok()
+                .and_then(|registry| find(&registry, address))
         })
-        .expect("async mock is no longer active")
-        .1;
-    state.clone()
+        .ok()
+        .flatten();
+    local.or_else(|| {
+        if GLOBAL_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+            find(&lock(&REGISTRY), address)
+        } else {
+            None
+        }
+    })
+}
+
+fn find(registry: &[RegistryEntry], address: usize) -> Option<Arc<dyn Any + Send + Sync>> {
+    registry
+        .iter()
+        .find(|entry| entry.0 == address)
+        .map(|entry| entry.1.clone())
 }
 
 fn poll_mock<F: Future>(future: Pin<&mut F>, context: &mut Context<'_>) -> Poll<F::Output>
 where
     F::Output: Send + 'static,
 {
-    let address = poll_mock::<F> as *const () as usize;
-    if let Some(target) = crate::routing::route(address) {
-        if target != address {
+    let state = match lookup::<F::Output>(F::poll as *const () as usize) {
+        Some(state) => state,
+        None => {
+            let address = poll_mock::<F> as *const () as usize;
+            let target = crate::routing::route(address).expect("async mock is no longer active");
             // SAFETY: the original trampoline preserves F::poll's exact ABI and type.
             let original: fn(Pin<&mut F>, &mut Context<'_>) -> Poll<F::Output> =
                 unsafe { std::mem::transmute(target) };
             return original(future, context);
         }
-    }
-    let state = lookup::<F::Output>(F::poll as *const () as usize);
+    };
     let _guard = state.enter();
     let rule = state.select(&|_| true);
     let result = (lock(&rule.action))();

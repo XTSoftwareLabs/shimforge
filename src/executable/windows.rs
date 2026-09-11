@@ -26,6 +26,28 @@ unsafe extern "system" {
     fn VirtualProtect(address: *const c_void, size: usize, protection: u32, old: *mut u32) -> i32;
     fn FlushInstructionCache(process: *mut c_void, address: *const c_void, size: usize) -> i32;
     fn GetCurrentProcess() -> *mut c_void;
+    fn GetProcessMitigationPolicy(
+        process: *mut c_void,
+        policy: u32,
+        buffer: *mut u32,
+        size: usize,
+    ) -> i32;
+}
+
+pub(super) fn shadow_stack() -> Result<bool, Error> {
+    let mut flags = 0u32;
+    // SAFETY: the current-process handle and four-byte policy buffer are valid.
+    let result = syscall("query shadow stack", 0, || unsafe {
+        GetProcessMitigationPolicy(GetCurrentProcess(), 15, &mut flags, 4)
+    });
+    if result == 0 {
+        let error = os_error("query shadow stack");
+        if matches!(error, Error::Os { code: 87, .. }) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    Ok(flags & 1 != 0)
 }
 
 pub(super) fn allocate(source: usize) -> Result<usize, Error> {

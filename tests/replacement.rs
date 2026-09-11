@@ -33,7 +33,7 @@ fn direct_calls_are_replaced_and_restored_on_drop() {
     let _serial = serial_test();
     assert_eq!(increment(7), 8);
     {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
         assert_eq!(increment(7), 17);
         assert_eq!(add_ten(7), 17);
@@ -44,7 +44,7 @@ fn direct_calls_are_replaced_and_restored_on_drop() {
 #[test]
 fn multiple_replacements_restore_together() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
     replace!(session, multiply => triple, fn(i64) -> i64).unwrap();
     assert_eq!(increment(7), 17);
@@ -58,7 +58,7 @@ fn multiple_replacements_restore_together() {
 #[test]
 fn explicit_restore_is_idempotent_and_session_can_be_reused() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     session.restore().unwrap();
     replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
     assert_eq!(increment(3), 13);
@@ -76,7 +76,7 @@ fn explicit_restore_is_idempotent_and_session_can_be_reused() {
 fn panic_unwinding_restores_and_releases_session() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
         assert_eq!(increment(2), 12);
         panic!("exercise session cleanup");
@@ -84,7 +84,7 @@ fn panic_unwinding_restores_and_releases_session() {
     assert!(result.is_err());
     assert_eq!(increment(2), 3);
 
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => add_hundred, fn(i64) -> i64).unwrap();
     assert_eq!(increment(2), 102);
 }
@@ -92,24 +92,24 @@ fn panic_unwinding_restores_and_releases_session() {
 #[test]
 fn nested_sessions_fail_without_blocking() {
     let _serial = serial_test();
-    let session = Session::new().unwrap();
-    assert!(matches!(Session::new(), Err(Error::Busy)));
+    let session = Session::new_global().unwrap();
+    assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
     drop(session);
-    assert!(Session::new().is_ok());
+    assert!(Session::new_global().is_ok());
 }
 
 #[test]
 fn session_exclusivity_extends_to_other_threads() {
     let _serial = serial_test();
-    let session = Session::new().unwrap();
+    let session = Session::new_global().unwrap();
     assert!(
-        std::thread::spawn(|| matches!(Session::new(), Err(Error::Busy)))
+        std::thread::spawn(|| matches!(Session::try_new_global(), Err(Error::Busy)))
             .join()
             .unwrap()
     );
     drop(session);
     assert!(
-        std::thread::spawn(|| Session::new().is_ok())
+        std::thread::spawn(|| Session::new_global().is_ok())
             .join()
             .unwrap()
     );
@@ -118,7 +118,7 @@ fn session_exclusivity_extends_to_other_threads() {
 #[test]
 fn installed_replacement_is_visible_to_a_worker_thread() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
     // Start workers after installation and join them before restoration.
     let answer = std::thread::spawn(|| increment(31)).join().unwrap();
@@ -130,7 +130,7 @@ fn installed_replacement_is_visible_to_a_worker_thread() {
 #[test]
 fn duplicate_replacement_fails_without_losing_original() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
     assert_eq!(
         replace!(session, increment => add_hundred, fn(i64) -> i64),
@@ -144,7 +144,7 @@ fn duplicate_replacement_fails_without_losing_original() {
 #[test]
 fn replacement_cycles_are_rejected_without_disturbing_existing_patches() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => add_ten, fn(i64) -> i64).unwrap();
     assert_eq!(
         replace!(session, add_ten => increment, fn(i64) -> i64),
@@ -165,7 +165,7 @@ fn panic_replacement(value: i64) -> i64 {
 fn replacement_can_unwind_through_the_original_caller() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         replace!(session, increment => panic_replacement, fn(i64) -> i64).unwrap();
         increment(42)
     }));
@@ -175,13 +175,13 @@ fn replacement_can_unwind_through_the_original_caller() {
         "replacement rejected 42"
     );
     assert_eq!(increment(42), 43);
-    assert!(Session::new().is_ok());
+    assert!(Session::new_global().is_ok());
 }
 
 #[test]
 fn replacing_a_function_with_itself_is_rejected() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     assert_eq!(
         replace!(session, increment => increment, fn(i64) -> i64),
         Err(Error::SameAddress)
@@ -200,7 +200,7 @@ fn fake_greeting(name: &str) -> String {
 #[test]
 fn owned_return_values_preserve_ownership() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, greeting => fake_greeting, fn(&str) -> String).unwrap();
     let answer = greeting("Rust");
     session.restore().unwrap();
@@ -231,7 +231,7 @@ fn fake_aggregate(seed: u64, label: &str) -> Aggregate {
 #[test]
 fn large_aggregate_return_keeps_the_hidden_return_pointer() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, aggregate => fake_aggregate, fn(u64, &str) -> Aggregate).unwrap();
     assert_eq!(
         aggregate(25, "payload"),
@@ -286,7 +286,7 @@ fn fake_many_arguments(
 #[test]
 fn replacement_preserves_integer_float_and_stack_arguments() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(
         session,
         many_arguments => fake_many_arguments,
@@ -307,7 +307,7 @@ fn replacement_preserves_integer_float_and_stack_arguments() {
 #[test]
 fn expectations_preserve_integer_float_and_stack_arguments() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let call = shimforge::mock!(
         session,
         many_arguments,
@@ -338,7 +338,7 @@ fn borrowed_identity(value: &str) -> &str {
 fn replacement_preserves_the_borrowed_argument_lifetime() {
     let _serial = serial_test();
     let owned = String::from("borrowed data");
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, borrowed => borrowed_identity, for<'a> fn(&'a str) -> &'a str).unwrap();
     let answer = borrowed(owned.as_str());
     assert_eq!(answer, owned);
@@ -368,7 +368,7 @@ impl Counter {
 fn methods_with_mutable_receivers_are_supported() {
     let _serial = serial_test();
     let mut counter = Counter { value: 5 };
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, Counter::advance => Counter::fake_advance, fn(&mut Counter, i64) -> i64)
         .unwrap();
     assert_eq!(counter.advance(3), 35);
@@ -387,7 +387,7 @@ fn fake_generic_size(seed: usize) -> usize {
 #[test]
 fn replacing_one_generic_instantiation_preserves_another() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, generic_size::<u32> => fake_generic_size, fn(usize) -> usize).unwrap();
     assert_eq!(generic_size::<u32>(1), 101);
     assert_eq!(generic_size::<u64>(1), 9);
@@ -407,7 +407,7 @@ extern "C" fn native_product(a: i64, b: i64) -> i64 {
 #[test]
 fn native_abi_functions_are_supported() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, native_sum => native_product, extern "C" fn(i64, i64) -> i64).unwrap();
     assert_eq!(native_sum(6, 7), 42);
     session.restore().unwrap();
@@ -417,7 +417,7 @@ fn native_abi_functions_are_supported() {
 #[test]
 fn noncapturing_closure_can_be_a_replacement() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, increment => |value| value - 2, fn(i64) -> i64).unwrap();
     assert_eq!(increment(42), 40);
     session.restore().unwrap();
@@ -436,7 +436,7 @@ fn fake_touch(value: &mut usize) {
 fn unit_return_functions_are_supported() {
     let _serial = serial_test();
     let mut value = 0;
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, touch => fake_touch, fn(&mut usize)).unwrap();
     touch(&mut value);
     assert_eq!(value, 5);
@@ -456,7 +456,7 @@ unsafe fn unsafe_add_ten(value: i64) -> i64 {
 #[test]
 fn unsafe_function_installation_does_not_require_an_unsafe_block() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, unsafe_increment => unsafe_add_ten, unsafe fn(i64) -> i64).unwrap();
     // SAFETY: Both test functions accept any i64.
     assert_eq!(unsafe { unsafe_increment(5) }, 15);
@@ -484,7 +484,7 @@ unsafe extern "C" fn unsafe_native_product(a: i64, b: i64) -> i64 {
 #[test]
 fn system_abi_and_unsafe_native_functions_are_supported() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, system_sum => system_product, extern "system" fn(i64, i64) -> i64).unwrap();
     replace!(session, unsafe_native_sum => unsafe_native_product, unsafe extern "C" fn(i64, i64) -> i64)
         .unwrap();

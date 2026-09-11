@@ -115,7 +115,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[test]
 fn matches_arguments_and_checks_exact_counts() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let first = prices
         .expect()
@@ -146,7 +146,7 @@ fn matches_arguments_and_checks_exact_counts() {
 #[test]
 fn callbacks_capture_values_and_keep_mutable_state() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let base = 20;
     let mut calls = 0;
@@ -166,7 +166,7 @@ fn callbacks_capture_values_and_keep_mutable_state() {
 #[test]
 fn constant_owned_values_are_cloned_for_each_call() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let titles = mock!(session, title, fn(u32) -> String).unwrap();
     titles
         .expect()
@@ -182,7 +182,7 @@ fn constant_owned_values_are_cloned_for_each_call() {
 #[test]
 fn returns_non_clone_values_once() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let tickets = mock!(session, issue_ticket, fn(u64) -> Ticket).unwrap();
     let expected = tickets.expect().return_once(Ticket(90)).unwrap();
     assert_eq!(issue_ticket(1), Ticket(90));
@@ -193,7 +193,7 @@ fn returns_non_clone_values_once() {
 #[test]
 fn once_callbacks_move_captured_values() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let titles = mock!(session, title, fn(u32) -> String).unwrap();
     let value = String::from("one owner");
     titles
@@ -209,7 +209,7 @@ fn once_callbacks_move_captured_values() {
 #[test]
 fn default_values_and_unbounded_counts_work() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let titles = mock!(session, title, fn(u32) -> String).unwrap();
     let optional = titles.expect().returns_default().unwrap();
     optional.verify().unwrap();
@@ -221,7 +221,7 @@ fn default_values_and_unbounded_counts_work() {
 #[test]
 fn count_ranges_accept_their_bounds() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices
         .expect()
@@ -271,7 +271,7 @@ fn count_ranges_accept_their_bounds() {
 #[test]
 fn invalid_count_ranges_are_rejected_without_adding_rules() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let start = 3;
     let end = 2;
@@ -284,7 +284,7 @@ fn invalid_count_ranges_are_rejected_without_adding_rules() {
 #[test]
 fn exhausted_rules_yield_to_later_matching_rules() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().once().returns(10).unwrap();
     prices.expect().times(2).returns(20).unwrap();
@@ -298,7 +298,7 @@ fn exhausted_rules_yield_to_later_matching_rules() {
 #[test]
 fn borrowed_arguments_and_returns_keep_their_lifetimes() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let words = mock!(session, first_word, for<'a> fn(&'a str) -> &'a str).unwrap();
     words
         .expect()
@@ -313,7 +313,7 @@ fn borrowed_arguments_and_returns_keep_their_lifetimes() {
 #[test]
 fn callbacks_can_write_output_parameters() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let reads = mock!(session, fill, fn(&mut [u8]) -> usize).unwrap();
     reads
         .expect()
@@ -332,7 +332,7 @@ fn callbacks_can_write_output_parameters() {
 #[test]
 fn methods_match_the_receiver_and_borrowed_parameters() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let lookups = mock!(session, Store::lookup, fn(&Store, &str) -> String).unwrap();
     lookups
         .expect()
@@ -349,7 +349,7 @@ fn methods_match_the_receiver_and_borrowed_parameters() {
 #[test]
 fn file_reads_match_paths_and_return_io_errors() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let reads = mock!(
         session,
         fs::read_to_string::<&Path>,
@@ -387,7 +387,7 @@ fn network_expectations_check_payloads_without_sending_packets() {
     receiver.set_nonblocking(true).unwrap();
     let address = receiver.local_addr().unwrap();
     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let sends = mock!(
         session,
         UdpSocket::send_to::<SocketAddr>,
@@ -411,7 +411,7 @@ fn network_expectations_check_payloads_without_sending_packets() {
 #[test]
 fn a_sequence_checks_order_across_functions() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let taxes = mock!(session, tax, fn(u64) -> u64).unwrap();
     let order = Sequence::new();
@@ -435,7 +435,7 @@ fn a_sequence_checks_order_across_functions() {
 #[test]
 fn a_sequence_rejects_out_of_order_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let taxes = mock!(session, tax, fn(u64) -> u64).unwrap();
     let order = Sequence::new();
@@ -460,7 +460,7 @@ fn a_sequence_rejects_out_of_order_calls() {
 #[test]
 fn checkpoint_verifies_and_clears_finished_expectations() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().once().returns(10).unwrap();
     assert!(prices.checkpoint().is_err());
@@ -473,7 +473,7 @@ fn checkpoint_verifies_and_clears_finished_expectations() {
 #[test]
 fn missing_calls_fail_verification_and_restore_still_removes_the_patch() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let expected = prices.expect().times(2).returns(10).unwrap();
     assert_eq!(price(1), 10);
@@ -488,7 +488,7 @@ fn missing_calls_fail_verification_and_restore_still_removes_the_patch() {
 #[test]
 fn unexpected_arguments_are_reported_even_if_the_panic_is_caught() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().with(|id| *id == 1).returns(10).unwrap();
     assert!(catch_unwind(|| price(2)).is_err());
@@ -499,7 +499,7 @@ fn unexpected_arguments_are_reported_even_if_the_panic_is_caught() {
 #[test]
 fn calls_beyond_the_limit_fail() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let expected = prices.expect().once().returns(10).unwrap();
     assert_eq!(price(1), 10);
@@ -511,7 +511,7 @@ fn calls_beyond_the_limit_fail() {
 #[test]
 fn never_rules_allow_no_calls_and_reject_matching_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().with(|id| *id == 9).never().unwrap();
     prices.expect().with(|id| *id != 9).returns(10).unwrap();
@@ -524,7 +524,7 @@ fn never_rules_allow_no_calls_and_reject_matching_calls() {
 #[test]
 fn configured_panics_count_as_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let expected = prices.expect().once().panics("price unavailable").unwrap();
     let panic = catch_unwind(|| price(1)).unwrap_err();
@@ -542,20 +542,20 @@ fn configured_panics_count_as_calls() {
 fn drop_checks_counts_and_restores_code_before_panicking() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let prices = mock!(session, price, fn(u32) -> u64).unwrap();
         prices.expect().once().returns(10).unwrap();
     }));
     assert!(result.is_err());
     assert_eq!(price(1), 101);
-    assert!(Session::new().is_ok());
+    assert!(Session::new_global().is_ok());
 }
 
 #[test]
 fn unwinding_does_not_panic_again_for_missing_calls() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let prices = mock!(session, price, fn(u32) -> u64).unwrap();
         prices.expect().once().returns(10).unwrap();
         panic!("test failed first");
@@ -567,7 +567,7 @@ fn unwinding_does_not_panic_again_for_missing_calls() {
 #[test]
 fn callbacks_are_serialized_across_threads() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let mut total = 0;
     let expected = prices
@@ -593,7 +593,7 @@ fn callbacks_are_serialized_across_threads() {
 #[test]
 fn recursive_calls_fail_without_deadlocking() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().returning(|id| price(id + 1)).unwrap();
     assert!(catch_unwind(|| price(1)).is_err());
@@ -603,7 +603,7 @@ fn recursive_calls_fail_without_deadlocking() {
 #[test]
 fn dropping_the_handle_keeps_the_mock_until_session_restore() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().once().returns(42).unwrap();
     drop(prices);
@@ -616,7 +616,7 @@ fn dropping_the_handle_keeps_the_mock_until_session_restore() {
 fn restore_drops_captures_and_rejects_new_rules_on_old_handles() {
     let _serial = serial_test();
     let dropped = Arc::new(AtomicUsize::new(0));
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     let marker = DropCount(Arc::clone(&dropped));
     prices
@@ -638,7 +638,7 @@ fn restore_drops_captures_and_rejects_new_rules_on_old_handles() {
 fn the_same_macro_call_site_can_be_used_in_later_sessions() {
     let _serial = serial_test();
     for value in [10, 20] {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let prices = mock!(session, price, fn(u32) -> u64).unwrap();
         prices.expect().once().returns(value).unwrap();
         assert_eq!(price(1), value);
@@ -649,7 +649,7 @@ fn the_same_macro_call_site_can_be_used_in_later_sessions() {
 #[test]
 fn duplicate_mocks_leave_the_first_mock_usable() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(session, price, fn(u32) -> u64).unwrap();
     prices.expect().once().returns(42).unwrap();
     let duplicate = mock!(session, price, fn(u32) -> u64);
@@ -662,7 +662,7 @@ fn duplicate_mocks_leave_the_first_mock_usable() {
 #[test]
 fn failed_installation_clears_the_slot_for_the_next_attempt() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, price => fixed_price, fn(u32) -> u64).unwrap();
     for attempt in 0..2 {
         let result = mock!(session, price, fn(u32) -> u64);
@@ -682,7 +682,7 @@ fn failed_installation_clears_the_slot_for_the_next_attempt() {
 #[test]
 fn boxed_future_callbacks_match_arguments_and_can_return_pending() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let reads = mock!(
         session,
         boxed_read,
@@ -717,7 +717,7 @@ fn macro_names_do_not_shadow_the_callers_session_or_types() {
     type Option = ();
     type String = ();
     let _: (Result, Box, Option, String) = ((), (), (), ());
-    let mut state = Session::new().unwrap();
+    let mut state = Session::new_global().unwrap();
     let prices = mock!(state, price, fn(u32) -> u64).unwrap();
     prices.expect().once().returns(42).unwrap();
     assert_eq!(price(1), 42);
@@ -740,7 +740,7 @@ fn trim_left<'a>(left: &'a str, right: &str) -> &'a str {
 #[test]
 fn independent_input_lifetimes_keep_their_output_link() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let trim = mock!(
         session,
         trim_left,
@@ -761,7 +761,7 @@ fn independent_input_lifetimes_keep_their_output_link() {
 #[test]
 fn genuine_static_inputs_and_results_stay_supported() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let length = mock!(session, static_length, fn(&'static str) -> usize).unwrap();
     let seen = Arc::new(Mutex::new(None));
     let captured = seen.clone();
@@ -785,7 +785,7 @@ fn genuine_static_inputs_and_results_stay_supported() {
 fn signature_checks_do_not_run_source_or_target_expressions() {
     let _serial = serial_test();
     let mut evaluated = 0;
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let prices = mock!(
         session,
         {
@@ -810,7 +810,7 @@ fn signature_checks_do_not_run_source_or_target_expressions() {
 #[test]
 fn source_and_target_expressions_can_move_values_and_use_question_mark() -> Result<(), Error> {
     let _serial = serial_test();
-    let mut session = Session::new()?;
+    let mut session = Session::new_global()?;
     let owned = String::from("source");
     let prices = mock!(
         session,

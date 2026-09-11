@@ -20,10 +20,10 @@ codegen-units = 1
 incremental = false
 ```
 
-Run tests that share global mocks one at a time:
+Run tests normally. Mocks are thread-local by default:
 
 ```text
-cargo test -- --test-threads=1
+cargo test
 ```
 
 ## Disk access
@@ -268,16 +268,17 @@ are in [`tests/expectations.rs`](tests/expectations.rs),
 
 ## Session lifetime
 
-`Session::new()` and `Session::new_global()` create global mocks. These affect
-worker threads too. `Session::new_local()` creates mocks for the current thread;
-other threads use their own mocks or call the original function.
+`Session::new()` and `Session::new_local()` create mocks for the current thread.
+Other threads use their own mocks or call the original function. Use
+`Session::new_global()` when worker threads need the same mock, including async
+tasks that may move between threads.
 
 ```rust
 use shimforge::{mock, Session};
 
 fn count(seed: u64) -> u64 { seed.wrapping_add(1) }
 
-let mut session = Session::new_local().unwrap();
+let mut session = Session::new().unwrap();
 let counts = mock!(session, count, fn(u64) -> u64).unwrap();
 counts.expect().once().returns(42).unwrap();
 assert_eq!(count(3), 42);
@@ -288,35 +289,45 @@ assert_eq!(count(3), 4);
 ```
 
 Local sessions may coexist on different threads, even for the same function.
-Each thread may hold one session. Global and local sessions cannot coexist;
-conflicts return `Error::Busy`. Local mode supports `mock!` and `mock_async`.
-Use a global session for `replace!` and `replace_raw`.
+Each thread may hold one session. Global sessions wait for other sessions to
+finish; local sessions wait for an active global session. Nested sessions return
+`Error::Busy`. Use `try_new_local()` or `try_new_global()` to return `Error::Busy`
+instead of waiting. Workers using a global mock do not need their own session.
+Both modes support `mock!`, `replace!`, and `mock_async`. The untyped, unsafe
+`replace_raw` API requires a global session.
 
-Coordinate parallel tests so no thread calls a target during its first patch
-installation or final restoration. Local mode does not make these writes atomic.
-Saved code is kept until the last local session releases it. Entries containing
-calls, branches, or unsupported relocation forms are rejected in local mode.
+Install a local mock before starting calls to that target. Only the first local
+installation changes its code. Later local installs and cleanup leave the entry
+in place, so other threads can keep calling it. One code page per target is kept
+until process exit; mock state is released when the session ends. Keep those
+functions loaded for the rest of the process. Loop instructions and unsupported
+relocation forms are rejected in local mode. Some entries need a call bridge;
+these require shadow stacks to stay off on every calling thread. Shimforge checks
+the setting but never disables it. Do not change stack protection settings while
+local patches are installed.
 
-Keep the session alive while using the mock. Drop restores the original code,
-including during a panic. Drop also checks expectations, without raising a second
-panic during unwinding. `session.restore()` removes
-the mocks early and then checks expectations. Configure mocks and run checkpoints
-while target calls are stopped. Join workers before verification and restoration.
+Keep the session alive while using the mock. Drop restores original behavior,
+including during a panic, and checks expectations without raising a second panic.
+`session.restore()` removes the mocks early and checks expectations. Configure
+mocks and run checkpoints while their calls are stopped. Join workers using
+global mocks before verification and cleanup.
 
 Functions, methods, and concrete generic functions are supported. `replace!` is
 also available for simple replacements, unsafe functions, and native calls with
-matching `extern` signatures.
+matching `extern` signatures. In local mode, each compiled macro site stays bound
+to one target function; do not reuse that site for different function pointers.
 
 ## Safety and limits
 
 The public API checks signatures and handles unsafe operations inside the library.
 You do not need an `unsafe` block, but you must follow these rules to avoid memory
-errors. No thread may call the target while installing or restoring a mock,
-including during drop. Join workers before ending the session; the session lock
-does not stop function calls.
+errors. No thread may call a target during its first code patch. Global code
+patches also need calls stopped during restoration, including drop. The session
+lock coordinates sessions, not function calls.
 
 Source and replacement must match in calling convention, argument and return
-layout, and lifetimes for every caller. Keep both functions loaded until restored.
+layout, and lifetimes for every caller. Keep global replacements loaded until
+restored and locally patched functions loaded until process exit.
 Do not mock memory allocation, locking, or OS functions that shimforge uses.
 Lifetime checks catch common mistakes in ordinary Rust functions. Generic
 instances, nested borrowed types, pre-cast pointers, and unsafe or native

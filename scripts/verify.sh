@@ -7,6 +7,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked -- --test-threads=1
+cargo test --test parallel --locked -- --test-threads=8
 
 mkdir -p coverage/linux
 cargo llvm-cov --workspace --all-targets --locked \

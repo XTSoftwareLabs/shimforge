@@ -24,8 +24,22 @@ pub(super) fn should_fail(operation: &'static str) -> bool {
 
 struct Inject;
 
+#[cfg(target_os = "linux")]
 #[test]
-fn local_installation_and_restoration_errors_can_be_retried() {
+fn map_read_errors_close_the_owned_descriptor() {
+    let descriptor_count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
+    let before = descriptor_count();
+    for operation in ["open maps", "read maps"] {
+        let _injection = Inject::new(&[(operation, 1)]);
+        // SAFETY: errno is writable storage for this thread.
+        unsafe { *libc::__errno_location() = libc::EIO };
+        assert!(matches!(platform::region_at(1), Err(Error::Mapping(_))));
+    }
+    assert_eq!(descriptor_count(), before);
+}
+
+#[test]
+fn local_installation_errors_can_be_retried_and_cleanup_does_not_write_code() {
     let _serial = crate::tests::serial();
     fn value(seed: u64) -> u64 {
         seed.wrapping_add(1)
@@ -42,11 +56,11 @@ fn local_installation_and_restoration_errors_can_be_retried() {
             result.unwrap().expect().once().returns(40).unwrap();
         }
     }
+    assert_eq!(value(1), 40);
     {
         let _injection = Inject::new(&[("protect memory", 1)]);
-        assert!(session.restore().is_err());
+        session.restore().unwrap();
     }
-    assert_eq!(value(1), 40);
     session.restore().unwrap();
     assert_eq!(value(1), 2);
 }
@@ -369,7 +383,7 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     }
     memory.protect(0, RX);
     platform::flush(memory.address, 257).unwrap();
-    let mut session = crate::Session::new().unwrap();
+    let mut session = crate::Session::new_global().unwrap();
     // SAFETY: Both NOP/RET functions use the same void ABI. This test owns their
     // memory and keeps calls stopped while patching.
     unsafe {
@@ -412,7 +426,7 @@ fn a_generated_cet_function_can_execute_replace_and_restore() {
     // SAFETY: ENDBR64, NOPs, MOV EAX,7, RET form an extern C fn() -> u32.
     let source: extern "C" fn() -> u32 = unsafe { std::mem::transmute(memory.address) };
     assert_eq!(source(), 7);
-    let mut session = crate::Session::new().unwrap();
+    let mut session = crate::Session::new_global().unwrap();
     // SAFETY: Both functions match in ABI and lifetime. Only this thread can call
     // the generated function, and calls are stopped while patching.
     unsafe { session.replace_raw(source as *const (), native_replacement as *const ()) }.unwrap();

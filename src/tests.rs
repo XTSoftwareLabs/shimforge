@@ -8,11 +8,11 @@ fn local_sessions_recover_from_global_poison_and_reject_raw_replacement() {
         let mut session = Session::new_global().unwrap();
         let mock = crate::mock!(session, original, fn(u64) -> u64).unwrap();
         mock.expect().returns(4).unwrap();
-        assert!(matches!(Session::new_local(), Err(Error::Busy)));
+        assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
         panic!("poison the writer");
     });
     let mut session = Session::new_local().unwrap();
-    assert!(matches!(Session::new_local(), Err(Error::Busy)));
+    assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     // SAFETY: valid pointers; local mode rejects raw installation before access.
     let result = unsafe { session.replace_raw(original as *const (), replacement as *const ()) };
     assert!(result.is_err());
@@ -31,6 +31,39 @@ pub(crate) fn serial() -> MutexGuard<'static, ()> {
     TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[test]
+fn sessions_wait_across_threads_but_nested_sessions_fail() {
+    let _serial = serial();
+    for local in [true, false] {
+        let session = Session::new_global().unwrap();
+        assert!(matches!(Session::new(), Err(Error::Busy)));
+        assert!(matches!(Session::new_global(), Err(Error::Busy)));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
+            assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
+            started_tx.send(()).unwrap();
+            let _session = if local {
+                Session::new()
+            } else {
+                Session::new_global()
+            }
+            .unwrap();
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx.try_recv().is_err());
+        drop(session);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        worker.join().unwrap();
+    }
+    drop(Session::try_new_global().unwrap());
+    drop(Session::try_new_local().unwrap());
 }
 
 fn original(value: u64) -> u64 {
@@ -52,6 +85,10 @@ fn all_errors_are_useful() {
             "address is not readable executable memory",
         ),
         (Error::MemoryChanged, "function bytes changed unexpectedly"),
+        (
+            Error::ShadowStack,
+            "this function entry cannot be mocked with shadow stacks enabled",
+        ),
         (
             Error::SameAddress,
             "source and replacement have the same address",
@@ -90,21 +127,21 @@ fn all_errors_are_useful() {
 fn poisoned_sessions_recover_after_unwinding() {
     let _serial = serial();
     let panic = std::panic::catch_unwind(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         replace!(session, original => replacement, fn(u64) -> u64).unwrap();
         assert_eq!(original(1), 208);
         panic!("simulate failed test");
     });
     assert!(panic.is_err());
     assert_eq!(original(1), 110);
-    let _session = Session::new().unwrap();
-    assert!(matches!(Session::new(), Err(Error::Busy)));
+    let _session = Session::new_global().unwrap();
+    assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
 }
 
 #[test]
 fn installation_errors_do_not_change_the_target() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     assert_eq!(
         replace!(session, original => original, fn(u64) -> u64),
         Err(Error::SameAddress)
@@ -127,7 +164,7 @@ fn installation_errors_do_not_change_the_target() {
 #[test]
 fn failed_restoration_keeps_ownership_for_retry() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     replace!(session, original => replacement, fn(u64) -> u64).unwrap();
     session.patches[0].replacement[0] ^= 1;
     assert_eq!(session.restore(), Err(Error::MemoryChanged));

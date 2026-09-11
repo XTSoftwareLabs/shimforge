@@ -82,6 +82,26 @@ fn replacement_checks_parse_the_source_target_and_signature() {
 }
 
 #[test]
+fn local_replacements_infer_generic_argument_types() {
+    for signature in [
+        quote!(fn()),
+        quote!(for<'a> fn(&'a str) -> &'a str),
+        quote!(unsafe extern "system" fn(u32) -> u64),
+    ] {
+        let tokens = expand_replacement(syn::parse2(
+            quote!(shimforge, session, source, target, #signature),
+        ));
+        syn::parse2::<Expr>(tokens.clone()).unwrap();
+        assert!(tokens.to_string().contains("__dispatch"));
+    }
+    assert!(
+        expand_replacement(syn::parse2(quote!(shimforge)))
+            .to_string()
+            .contains("compile_error")
+    );
+}
+
+#[test]
 fn source_paths_keep_their_generic_lifetimes() {
     let saved = parse_quote!(saved);
     for source in [parse_quote!(source), parse_quote!((source))] {

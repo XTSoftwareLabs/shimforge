@@ -160,19 +160,19 @@ fn duplicate_installation_can_be_retried_after_restore() {
 fn global_and_local_sessions_exclude_each_other() {
     let _serial = serial_test();
     let local = Session::new_local().unwrap();
-    assert!(matches!(Session::new_local(), Err(Error::Busy)));
-    assert!(matches!(Session::new_global(), Err(Error::Busy)));
+    assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
+    assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
     std::thread::spawn(|| {
-        assert!(matches!(Session::new_global(), Err(Error::Busy)));
+        assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
         assert!(Session::new_local().is_ok());
     })
     .join()
     .unwrap();
     drop(local);
     let global = Session::new_global().unwrap();
-    assert!(matches!(Session::new_local(), Err(Error::Busy)));
+    assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     std::thread::spawn(|| {
-        assert!(matches!(Session::new_local(), Err(Error::Busy)));
+        assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     })
     .join()
     .unwrap();
@@ -181,12 +181,160 @@ fn global_and_local_sessions_exclude_each_other() {
 }
 
 #[test]
-fn raw_replacements_are_rejected_in_local_mode() {
+fn replacements_use_local_mode_by_default() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let result = shimforge::replace!(session, increment => |x| x + 10, fn(i64) -> i64);
-    assert!(matches!(result, Err(Error::Expectation(_))));
+    let mut session = Session::new().unwrap();
+    shimforge::replace!(session, increment => |x| x + 10, fn(i64) -> i64).unwrap();
+    assert_eq!(increment(1), 11);
+    assert_eq!(std::thread::spawn(|| increment(1)).join().unwrap(), 2);
+    session.restore().unwrap();
     assert_eq!(increment(1), 2);
+}
+
+#[test]
+fn a_function_can_switch_between_local_and_global_modes() {
+    let _serial = serial_test();
+    for global in [false, true, false, true] {
+        let mut session = if global {
+            Session::new_global()
+        } else {
+            Session::new()
+        }
+        .unwrap();
+        install_shared(&mut session, 70);
+        assert_eq!(increment(1), 70);
+        session.restore().unwrap();
+        assert_eq!(increment(1), 2);
+    }
+    let mut session = Session::new_global().unwrap();
+    shimforge::replace!(session, increment => |value| value + 10, fn(i64) -> i64).unwrap();
+    assert_eq!(increment(1), 11);
+    assert_eq!(std::thread::spawn(|| increment(1)).join().unwrap(), 11);
+    assert!(shimforge::replace!(session, increment => |value| value + 20, fn(i64) -> i64).is_err());
+    session.restore().unwrap();
+    assert_eq!(increment(1), 2);
+}
+
+#[test]
+fn local_replacements_keep_borrows_and_native_arguments() {
+    let _serial = serial_test();
+    let mut session = Session::new().unwrap();
+    shimforge::replace!(session, borrowed => |value| &value[1..], fn(&str) -> &str).unwrap();
+    assert_eq!(borrowed("word"), "ord");
+    assert_eq!(
+        std::thread::spawn(|| borrowed("word")).join().unwrap(),
+        "word"
+    );
+    shimforge::replace!(session, native => native_replacement, extern "C" fn(i64) -> i64).unwrap();
+    assert_eq!(native(1), 31);
+    assert_eq!(std::thread::spawn(|| native(1)).join().unwrap(), 3);
+}
+
+extern "C" fn native_replacement(value: i64) -> i64 {
+    value + 30
+}
+
+fn first_call() -> usize {
+    failing_callee()
+}
+fn failing_callee() -> usize {
+    panic!("callee panic")
+}
+
+#[test]
+fn original_calls_can_unwind_through_the_saved_entry() {
+    let _serial = serial_test();
+    let mut session = Session::new().unwrap();
+    let mock = mock!(session, first_call, fn() -> usize).unwrap();
+    mock.expect().once().returns(20).unwrap();
+    assert_eq!(first_call(), 20);
+    std::thread::spawn(|| {
+        let error = catch_unwind(first_call).unwrap_err();
+        assert_eq!(*error.downcast::<&str>().unwrap(), "callee panic");
+    })
+    .join()
+    .unwrap();
+    session.restore().unwrap();
+    assert!(catch_unwind(first_call).is_err());
+}
+
+#[test]
+fn filesystem_replacements_need_no_wrappers() {
+    let _serial = serial_test();
+    use std::{
+        fs::{self, File},
+        io,
+        path::Path,
+    };
+    let mut session = Session::new().unwrap();
+    shimforge::replace!(session, fs::read::<&Path> => |_| Ok(b"file contents".to_vec()), fn(&Path) -> io::Result<Vec<u8>>).unwrap();
+    shimforge::replace!(session, fs::write::<&Path, &[u8]> => |path, data| {
+        assert_eq!(path, Path::new("virtual/output"));
+        assert_eq!(data, b"data");
+        Ok(())
+    }, fn(&Path, &[u8]) -> io::Result<()>)
+    .unwrap();
+    shimforge::replace!(session, File::open::<&str> => |_| Err(io::ErrorKind::PermissionDenied.into()), fn(&str) -> io::Result<File>).unwrap();
+    assert_eq!(
+        fs::read(Path::new("virtual/input")).unwrap(),
+        b"file contents"
+    );
+    fs::write(Path::new("virtual/output"), b"data".as_slice()).unwrap();
+    assert_eq!(
+        File::open("virtual/input").unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+}
+
+#[test]
+fn file_mocks_do_not_intercept_memory_inspection() {
+    let _serial = serial_test();
+    use std::{fs, io, path::Path};
+    for constructor in [Session::new, Session::new_global] {
+        let mut session = constructor().unwrap();
+        let read = mock!(
+            session,
+            fs::read_to_string::<&str>,
+            fn(&str) -> io::Result<String>
+        )
+        .unwrap();
+        read.expect()
+            .once()
+            .returning(|_| Ok("mock contents".to_owned()))
+            .unwrap();
+        let exists = mock!(session, Path::exists, fn(&Path) -> bool).unwrap();
+        exists.expect().once().returns(false).unwrap();
+        assert_eq!(fs::read_to_string("virtual/file").unwrap(), "mock contents");
+        let executable = std::env::current_exe().unwrap();
+        assert!(!executable.exists());
+        session.restore().unwrap();
+        assert!(executable.exists());
+    }
+}
+
+#[test]
+fn native_async_mocks_can_switch_modes() {
+    let _serial = serial_test();
+    for global in [false, true, false] {
+        let mut session = if global {
+            Session::new_global()
+        } else {
+            Session::new()
+        }
+        .unwrap();
+        let mock = session.mock_async(fetch(1)).unwrap();
+        mock.expect()
+            .times(if global { 2 } else { 1 })
+            .returns(80)
+            .unwrap();
+        assert_eq!(ready(fetch(1)), 80);
+        assert_eq!(
+            std::thread::spawn(|| ready(fetch(1))).join().unwrap(),
+            if global { 80 } else { 2 }
+        );
+        session.restore().unwrap();
+        assert_eq!(ready(fetch(1)), 2);
+    }
 }
 
 #[test]

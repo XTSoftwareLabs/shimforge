@@ -22,6 +22,8 @@ pub enum Error {
     InsufficientSpace,
     /// The function prefix contains an unsupported or invalid instruction.
     InvalidInstruction,
+    /// This entry needs a call bridge that cannot run with shadow stacks enabled.
+    ShadowStack,
     /// An operating system call failed.
     Os {
         /// Name of the failed operation.
@@ -48,6 +50,9 @@ impl fmt::Display for Error {
             Self::InsufficientSpace => f.write_str("function prefix is too short for a jump"),
             Self::InvalidInstruction => {
                 f.write_str("function prefix contains an unsupported or invalid instruction")
+            }
+            Self::ShadowStack => {
+                f.write_str("this function entry cannot be mocked with shadow stacks enabled")
             }
             Self::Os { operation, code } => write!(f, "{operation} failed (OS error {code})"),
             Self::Mapping(message) => write!(f, "cannot inspect memory mapping: {message}"),

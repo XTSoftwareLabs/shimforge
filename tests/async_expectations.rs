@@ -56,7 +56,7 @@ fn failed_async_installation_clears_the_registry_for_retry() {
         .unwrap();
     }
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let witness = fetch(0);
     replace_poll(&mut session, &witness);
     assert!(matches!(session.mock_async(witness), Err(Error::Overlap)));
@@ -119,7 +119,7 @@ async fn issue(id: u32) -> Ticket {
 fn native_async_functions_return_mock_values_without_running_the_body() {
     let _serial = serial_test();
     BODY_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let expected = fetches
         .expect()
@@ -139,7 +139,7 @@ fn native_async_functions_return_mock_values_without_running_the_body() {
 #[test]
 fn construction_and_cancellation_do_not_count_as_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let expected = fetches
         .expect()
@@ -155,7 +155,7 @@ fn construction_and_cancellation_do_not_count_as_calls() {
 #[test]
 fn callbacks_capture_state_and_produce_owned_outputs() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let prefix = String::from("page");
     let mut count = 0;
@@ -174,7 +174,7 @@ fn callbacks_capture_state_and_produce_owned_outputs() {
 #[test]
 fn once_responses_move_non_clone_outputs() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let issues = session.mock_async(issue(0)).unwrap();
     issues.expect().return_once(Ticket(80)).unwrap();
     let ticket = Ticket(81);
@@ -186,7 +186,7 @@ fn once_responses_move_non_clone_outputs() {
 #[test]
 fn default_outputs_and_checkpoints_work() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches.expect().once().returns_default().unwrap();
     assert_eq!(block_on(fetch(1)), "");
@@ -203,7 +203,7 @@ fn default_outputs_and_checkpoints_work() {
 fn async_io_can_return_errors_without_touching_disk() {
     let _serial = serial_test();
     BODY_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let reads = session.mock_async(read_config("witness.conf")).unwrap();
     reads
         .expect()
@@ -230,7 +230,7 @@ fn borrowed_async_methods_need_no_static_receiver() {
         prefix: String::from("service"),
     };
     let key = String::from("settings");
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let loads = session.mock_async(client.load(&key)).unwrap();
     loads
         .expect()
@@ -247,7 +247,7 @@ fn witness_and_mocked_futures_drop_their_inputs_once() {
     let _serial = serial_test();
     BODY_CALLS.store(0, Ordering::SeqCst);
     let dropped = Arc::new(AtomicUsize::new(0));
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let consumes = session
         .mock_async(consume(DropCount(Arc::clone(&dropped))))
         .unwrap();
@@ -263,7 +263,7 @@ fn witness_and_mocked_futures_drop_their_inputs_once() {
 #[test]
 fn other_future_types_with_the_same_output_stay_unchanged() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches
         .expect()
@@ -277,7 +277,7 @@ fn other_future_types_with_the_same_output_stay_unchanged() {
 #[test]
 fn sequences_check_the_order_of_awaited_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let issues = session.mock_async(issue(0)).unwrap();
     let order = Sequence::new();
@@ -300,7 +300,7 @@ fn sequences_check_the_order_of_awaited_calls() {
 #[test]
 fn missing_calls_fail_and_restore_still_restores_the_original() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches
         .expect()
@@ -315,7 +315,7 @@ fn missing_calls_fail_and_restore_still_restores_the_original() {
 #[test]
 fn extra_calls_fail_even_when_the_panic_is_caught() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let expected = fetches
         .expect()
@@ -332,7 +332,7 @@ fn extra_calls_fail_even_when_the_panic_is_caught() {
 #[test]
 fn never_rules_reject_awaited_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches.expect().never().unwrap();
     fetches.verify().unwrap();
@@ -343,7 +343,7 @@ fn never_rules_reject_awaited_calls() {
 #[test]
 fn configured_async_panics_count_as_calls() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let expected = fetches.expect().once().panics("offline").unwrap();
     assert!(catch_unwind(|| block_on(fetch(1))).is_err());
@@ -355,7 +355,7 @@ fn configured_async_panics_count_as_calls() {
 fn unwind_restores_async_code_without_a_second_panic() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let fetches = session.mock_async(fetch(0)).unwrap();
         fetches
             .expect()
@@ -371,7 +371,7 @@ fn unwind_restores_async_code_without_a_second_panic() {
 #[test]
 fn worker_threads_share_async_expectations() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let expected = fetches
         .expect()
@@ -391,7 +391,7 @@ fn worker_threads_share_async_expectations() {
 fn restore_drops_callbacks_and_invalidates_old_handles() {
     let _serial = serial_test();
     let dropped = Arc::new(AtomicUsize::new(0));
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let marker = DropCount(Arc::clone(&dropped));
     fetches
@@ -410,7 +410,7 @@ fn restore_drops_callbacks_and_invalidates_old_handles() {
 fn the_same_async_function_can_be_mocked_in_later_sessions() {
     let _serial = serial_test();
     for value in ["first", "second"] {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let fetches = session.mock_async(fetch(0)).unwrap();
         fetches.expect().once().returns(value.to_owned()).unwrap();
         assert_eq!(block_on(fetch(1)), value);
@@ -420,7 +420,7 @@ fn the_same_async_function_can_be_mocked_in_later_sessions() {
 #[test]
 fn duplicate_async_mocks_leave_the_first_mock_usable() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches
         .expect()
@@ -437,7 +437,7 @@ fn duplicate_async_mocks_leave_the_first_mock_usable() {
 fn futures_with_non_send_inputs_can_be_mocked() {
     let _serial = serial_test();
     let value = Rc::new(String::from("input"));
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(local_fetch(Rc::clone(&value))).unwrap();
     assert_eq!(Rc::strong_count(&value), 1);
     fetches
@@ -452,7 +452,7 @@ fn futures_with_non_send_inputs_can_be_mocked() {
 #[test]
 fn sync_and_async_expectations_share_sequences() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     let saves = mock!(session, save, fn(&str) -> usize).unwrap();
     let order = Sequence::new();
@@ -475,7 +475,7 @@ fn sync_and_async_expectations_share_sequences() {
 #[test]
 fn recursive_async_callbacks_fail_without_deadlocking() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let fetches = session.mock_async(fetch(0)).unwrap();
     fetches.expect().returning(|| block_on(fetch(1))).unwrap();
     assert!(catch_unwind(|| block_on(fetch(2))).is_err());

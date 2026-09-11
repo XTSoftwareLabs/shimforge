@@ -14,6 +14,18 @@ use windows as platform;
 const CAPACITY: usize = 4096;
 const REACH: usize = 1 << 30;
 
+pub(crate) fn check_call_bridge() -> Result<(), Error> {
+    check_shadow_stack(platform::shadow_stack()?)
+}
+
+fn check_shadow_stack(enabled: bool) -> Result<(), Error> {
+    if enabled {
+        Err(Error::ShadowStack)
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) struct Executable {
     address: usize,
     sealed: bool,

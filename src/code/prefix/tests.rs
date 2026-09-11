@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn lock_prefixes_require_a_supported_memory_update() {
+    for bytes in [
+        &[0xf0, 0x48, 0xff, 0x05, 0, 0, 0, 0][..],
+        &[0xf0, 0x83, 0x00, 1],
+        &[0xf0, 0x01, 0x00],
+        &[0xf0, 0x87, 0x00],
+        &[0xf0, 0xf7, 0x18],
+    ] {
+        assert_eq!(instruction(bytes).unwrap().0, bytes.len());
+    }
+    for bytes in [
+        &[0xf0, 0x48, 0xff, 0xc0][..],
+        &[0xf0, 0x90],
+        &[0xf0, 0x83, 0x38, 1],
+        &[0xf0, 0xff, 0x10],
+    ] {
+        assert!(instruction(bytes).is_err());
+    }
+}
+
+#[test]
 fn known_entry_instructions_have_exact_sizes() {
     let cases: &[&[u8]] = &[
         &[0x55],

@@ -23,7 +23,7 @@ pub use error::Error;
 pub use expectation::{CallCount, Expectation, Sequence};
 
 #[doc(hidden)]
-pub use shimforge_macros::{__check_signature, __mock};
+pub use shimforge_macros::{__check_signature, __mock, __replace_local};
 
 #[doc(hidden)]
 pub mod __private {
@@ -36,7 +36,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::thread::ThreadId;
 
 static SESSION: RwLock<()> = RwLock::new(());
-thread_local! { static LOCAL_ACTIVE: Cell<bool> = const { Cell::new(false) }; }
+thread_local! { static SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) }; }
 
 enum SessionLock {
     Global {
@@ -49,9 +49,7 @@ enum SessionLock {
 
 impl Drop for SessionLock {
     fn drop(&mut self) {
-        if matches!(self, Self::Local { .. }) {
-            LOCAL_ACTIVE.set(false);
-        }
+        SESSION_ACTIVE.set(false);
     }
 }
 
@@ -76,13 +74,14 @@ impl Drop for OwnedMock {
 
 /// A scope for global or thread-local function mocks.
 ///
-/// Drop restores replacements in reverse order, including during a panic.
+/// Drop removes mocks and restores original behavior, including during a panic.
 /// A session cannot move to another thread.
 #[must_use = "keep the session alive while using the mocks"]
 pub struct Session {
     patches: Vec<Patch>,
     mocks: Vec<OwnedMock>,
     local_patches: Vec<usize>,
+    global_routes: Vec<usize>,
     lock: SessionLock,
 }
 
@@ -92,54 +91,97 @@ impl Session {
         self
     }
 
-    /// Opens a session, or returns [`Error::Busy`] without blocking.
-    ///
-    /// Only one session can be active. Its lock does not stop function calls.
+    /// Opens a thread-local session. See [`Self::new_local`].
     pub fn new() -> Result<Self, Error> {
-        Self::new_global()
+        Self::new_local()
     }
 
     /// Opens a global session. Mocks affect all threads.
-    /// Returns [`Error::Busy`] while any other session is active.
+    /// Waits for other threads' sessions to end. Nested sessions return [`Error::Busy`].
     pub fn new_global() -> Result<Self, Error> {
-        let guard = match SESSION.try_write() {
-            Ok(lock) => lock,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return Err(Error::Busy),
-        };
-        Ok(Self {
-            patches: Vec::new(),
-            mocks: Vec::new(),
-            local_patches: Vec::new(),
-            lock: SessionLock::Global { _guard: guard },
-        })
+        Self::open(false, true)
     }
 
     /// Opens a session whose mocks affect only the current thread.
     /// Other threads keep their own mocks or call the original function.
     /// Only one local session may be active per thread. Global sessions exclude
-    /// local sessions. Stop target calls during first installation and final restoration.
+    /// local sessions, so this waits for them to end. Stop target calls during
+    /// the first installation. Later local installs and cleanup do not patch code.
     pub fn new_local() -> Result<Self, Error> {
-        if LOCAL_ACTIVE.get() {
+        Self::open(true, true)
+    }
+
+    /// Opens a local session without waiting for an active global session.
+    pub fn try_new_local() -> Result<Self, Error> {
+        Self::open(true, false)
+    }
+
+    /// Opens a global session without waiting for other sessions.
+    pub fn try_new_global() -> Result<Self, Error> {
+        Self::open(false, false)
+    }
+
+    fn open(local: bool, wait: bool) -> Result<Self, Error> {
+        if SESSION_ACTIVE.get() {
             return Err(Error::Busy);
         }
-        let guard = match SESSION.try_read() {
-            Ok(guard) => guard,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(TryLockError::WouldBlock) => return Err(Error::Busy),
+        let lock = if local {
+            let result = if wait {
+                SESSION.read().map_err(TryLockError::Poisoned)
+            } else {
+                SESSION.try_read()
+            };
+            let guard = match result {
+                Ok(guard) => guard,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => return Err(Error::Busy),
+            };
+            SessionLock::Local { _guard: guard }
+        } else {
+            let result = if wait {
+                SESSION.write().map_err(TryLockError::Poisoned)
+            } else {
+                SESSION.try_write()
+            };
+            let guard = match result {
+                Ok(guard) => guard,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => return Err(Error::Busy),
+            };
+            SessionLock::Global { _guard: guard }
         };
-        LOCAL_ACTIVE.set(true);
+        SESSION_ACTIVE.set(true);
         Ok(Self {
             patches: Vec::new(),
             mocks: Vec::new(),
             local_patches: Vec::new(),
-            lock: SessionLock::Local { _guard: guard },
+            global_routes: Vec::new(),
+            lock,
         })
     }
 
     #[doc(hidden)]
     pub fn __thread(&self) -> Option<ThreadId> {
         matches!(self.lock, SessionLock::Local { .. }).then(|| std::thread::current().id())
+    }
+
+    #[doc(hidden)]
+    /// # Safety
+    /// All three pointers must use the checked source signature and stay loaded
+    /// until process exit. Stop calls during the first installation.
+    pub unsafe fn __replace_local(
+        &mut self,
+        source: *const (),
+        dispatcher: *const (),
+        target: *const (),
+    ) -> Result<(), Error> {
+        self.local_patches.reserve(1);
+        // SAFETY: the macro checks the function types before calling this method.
+        unsafe {
+            routing::install_replacement(source as usize, dispatcher as usize, target as usize)?
+        };
+        self.local_patches.push(source as usize);
+        Ok(())
     }
 
     /// Installs a replacement at a raw function entry point.
@@ -177,6 +219,11 @@ impl Session {
         }) {
             return Err(Error::Overlap);
         }
+        self.global_routes.reserve(1);
+        if routing::global(source, target)? {
+            self.global_routes.push(source);
+            return Ok(());
+        }
         memory::read(target, 1)?;
         let bytes = memory::read(source, code::MAX_PREFIX)?;
         let plan = code::plan(source, target, &bytes)?;
@@ -188,6 +235,7 @@ impl Session {
             .patches
             .iter()
             .any(|patch| address < patch.address + patch.original.len() && patch.address < end)
+            || routing::overlaps(address, end - address)
         {
             return Err(Error::Overlap);
         }
@@ -243,9 +291,9 @@ impl Session {
         Ok(())
     }
 
-    /// Restores all replacements, then checks their expectations.
+    /// Removes all mocks, then checks their expectations.
     ///
-    /// Keep target calls stopped as required by [`Self::replace_raw`]. On error,
+    /// Stop global target calls as required by [`Self::replace_raw`]. On error,
     /// a failed patch stays in the session so you can retry. Expectation errors
     /// are returned after all patches have been removed.
     pub fn restore(&mut self) -> Result<(), Error> {
@@ -261,9 +309,11 @@ impl Session {
 
     fn restore_patches(&mut self) -> Result<(), Error> {
         while let Some(source) = self.local_patches.last() {
-            // SAFETY: callers stop target calls before final restoration.
-            unsafe { routing::remove(*source)? };
+            routing::remove(*source);
             self.local_patches.pop();
+        }
+        while let Some(source) = self.global_routes.pop() {
+            routing::remove_global(source);
         }
         while let Some(patch) = self.patches.last() {
             // SAFETY: replace_raw requires the target to stay loaded and idle here.
@@ -305,44 +355,44 @@ impl Drop for Session {
 ///
 /// The source signature must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: u64) -> u64 { value }
 /// shimforge::mock!(session, source, fn(u32) -> u32);
 /// ```
 /// A replacement cannot require a longer input borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: &str) -> usize { value.len() }
 /// shimforge::mock!(session, source, fn(&'static str) -> usize);
 /// ```
 /// Type aliases do not bypass this check:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: &str) -> usize { value.len() }
 /// type Input = &'static str;
 /// shimforge::mock!(session, source, fn(Input) -> usize);
 /// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(_: &str) -> &'static str { "fixed" }
 /// shimforge::mock!(session, source, fn(&str) -> &str);
 /// ```
 /// A result must stay tied to the same argument:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
 /// shimforge::mock!(session, source, for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
 /// ```
 /// Caller names cannot shadow the checks:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn __target(_: &str) -> &'static str { "fixed" }
 /// shimforge::mock!(session, __target, fn(&str) -> &str);
 /// ```
 /// Captures must be safe to send between threads:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source() -> usize { 1 }
 /// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
 /// let value = std::rc::Rc::new(2);
@@ -350,7 +400,7 @@ impl Drop for Session {
 /// ```
 /// Captures must outlive the test's stack:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source() -> usize { 1 }
 /// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
 /// let value = String::from("token");
@@ -358,20 +408,29 @@ impl Drop for Session {
 /// ```
 /// Return closures cannot create dangling references:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: &str) -> &str { value }
 /// let mock = shimforge::mock!(session, source, fn(&str) -> &str).unwrap();
 /// mock.expect().returning(|_| String::from("temporary").as_str());
 /// ```
 /// Calling conventions must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// extern "C" fn source() -> usize { 1 }
 /// shimforge::mock!(session, source, fn() -> usize);
 /// ```
 #[macro_export]
 macro_rules! mock {
     ($($input:tt)*) => { $crate::__mock!($crate, $($input)*) };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __install_replacement {
+    ($session:expr, $source:expr, $dispatcher:expr, $target:expr) => {{
+        // SAFETY: replace! checks the types before generating this dispatcher.
+        unsafe { $session.__replace_local($source, $dispatcher, $target) }
+    }};
 }
 
 #[doc(hidden)]
@@ -409,7 +468,7 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// ```no_run
 /// # fn original(x: i32) -> i32 { x + 1 }
 /// # fn fake(x: i32) -> i32 { x + 10 }
-/// let mut session = shimforge::Session::new()?;
+/// let mut session = shimforge::Session::new_global()?;
 /// shimforge::replace!(session, original => fake, fn(i32) -> i32)?;
 /// # Ok::<(), shimforge::Error>(())
 /// ```
@@ -420,50 +479,50 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 ///
 /// Incompatible signatures are rejected:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x: u64| x, fn(u32) -> u32);
 /// ```
 /// The source must also match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(x: u64) -> u64 { x }
 /// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
 /// ```
 /// Input borrows cannot be narrowed:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: &str) -> usize { value.len() }
 /// shimforge::replace!(session, source => |value| value.len(), fn(&'static str) -> usize);
 /// ```
 /// This also applies to mutable borrows:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(value: &mut usize) { *value += 1; }
 /// shimforge::replace!(session, source => |_| (), fn(&'static mut usize));
 /// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source(_: &str) -> &'static str { "fixed" }
 /// shimforge::replace!(session, source => |value| value, fn(&str) -> &str);
 /// ```
 /// A result must stay tied to the same argument:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
 /// shimforge::replace!(session, source => |_, right| right,
 ///     for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
 /// ```
 /// Calling conventions must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// extern "C" fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
 /// ```
 /// Capturing closures are rejected:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new().unwrap();
+/// let mut session = shimforge::Session::new_global().unwrap();
 /// let captured = String::from("hello");
 /// fn source() -> usize { 1 }
 /// shimforge::replace!(session, source => || captured.len(), fn() -> usize);
@@ -481,8 +540,12 @@ macro_rules! replace {
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
         let session = ($session).__borrow();
-        // SAFETY: types are checked above; callers must follow the runtime safety rules.
-        unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        if session.__thread().is_some() {
+            $crate::__replace_local!($crate, session, source, target, $(for<$($lt),+>)? fn($($arg),*) $(-> $ret)?)
+        } else {
+            // SAFETY: the types above match; callers follow the runtime safety rules.
+            unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? unsafe fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
@@ -492,8 +555,12 @@ macro_rules! replace {
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
         let session = ($session).__borrow();
-        // SAFETY: types are checked above; callers must follow the runtime safety rules.
-        unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        if session.__thread().is_some() {
+            $crate::__replace_local!($crate, session, source, target, $(for<$($lt),+>)? unsafe fn($($arg),*) $(-> $ret)?)
+        } else {
+            // SAFETY: the types above match; callers follow the runtime safety rules.
+            unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? extern $abi:literal fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
@@ -503,8 +570,12 @@ macro_rules! replace {
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
         let session = ($session).__borrow();
-        // SAFETY: types are checked above; callers must follow the runtime safety rules.
-        unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        if session.__thread().is_some() {
+            $crate::__replace_local!($crate, session, source, target, $(for<$($lt),+>)? extern $abi fn($($arg),*) $(-> $ret)?)
+        } else {
+            // SAFETY: the types above match; callers follow the runtime safety rules.
+            unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        }
     }};
     ($session:expr, $source:expr => $target:expr,
         $(for<$($lt:lifetime),+>)? unsafe extern $abi:literal fn($($arg:ty),* $(,)?) $(-> $ret:ty)? $(,)?) => {{
@@ -514,7 +585,11 @@ macro_rules! replace {
         fn checked<T>(source: T, _: T) -> T { source }
         let source = checked(source, target);
         let session = ($session).__borrow();
-        // SAFETY: types are checked above; callers must follow the runtime safety rules.
-        unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        if session.__thread().is_some() {
+            $crate::__replace_local!($crate, session, source, target, $(for<$($lt),+>)? unsafe extern $abi fn($($arg),*) $(-> $ret)?)
+        } else {
+            // SAFETY: the types above match; callers follow the runtime safety rules.
+            unsafe { session.replace_raw(source as *const (), target as *const ()) }
+        }
     }};
 }

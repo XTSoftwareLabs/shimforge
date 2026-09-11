@@ -26,7 +26,7 @@ extern "C-unwind" fn unwind_sum(a: i64, b: i64) -> i64 {
 #[test]
 fn native_calls_match_arguments_and_count_captured_responses() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64).unwrap();
     let mut results = vec![42, 24].into_iter();
     let count = sum
@@ -45,7 +45,7 @@ fn native_calls_match_arguments_and_count_captured_responses() {
 #[test]
 fn unsafe_and_system_functions_accept_expectations() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let sum = mock!(session, unchecked_sum, unsafe fn(i64, i64) -> i64).unwrap();
     sum.expect().once().returns(42).unwrap();
     // SAFETY: the function accepts all i64 values.
@@ -59,7 +59,7 @@ fn unsafe_and_system_functions_accept_expectations() {
 #[test]
 fn unwind_abi_keeps_rust_panic_behavior() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new_global().unwrap();
     let sum = mock!(session, unwind_sum, extern "C-unwind" fn(i64, i64) -> i64).unwrap();
     sum.expect().once().panics("chosen failure").unwrap();
     assert!(std::panic::catch_unwind(|| unwind_sum(6, 7)).is_err());
@@ -71,7 +71,7 @@ fn unwind_abi_keeps_rust_panic_behavior() {
 fn native_panic_does_not_cross_the_abi_boundary() {
     const CHILD: &str = "SHIMFORGE_NATIVE_PANIC_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let mut session = Session::new().unwrap();
+        let mut session = Session::new_global().unwrap();
         let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64).unwrap();
         sum.expect().panics("native callback failed").unwrap();
         native_sum(1, 2);
@@ -97,31 +97,33 @@ fn native_panic_does_not_cross_the_abi_boundary() {
 #[test]
 fn imported_system_function_is_mocked_without_a_wrapper() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let hostname = mock!(
-        session,
-        libc::gethostname,
-        unsafe extern "C" fn(*mut libc::c_char, usize) -> libc::c_int
-    )
-    .unwrap();
-    hostname
-        .expect()
-        .with(|_, size| *size == 64)
-        .once()
-        .returning(|buffer, size| {
-            let name = b"test-host\0";
-            assert!(size >= name.len());
-            // SAFETY: the caller provides a writable buffer of this size.
-            unsafe { std::ptr::copy_nonoverlapping(name.as_ptr().cast(), buffer, name.len()) };
-            0
-        })
+    for constructor in [Session::new_global, Session::new] {
+        let mut session = constructor().unwrap();
+        let hostname = mock!(
+            session,
+            libc::gethostname,
+            unsafe extern "C" fn(*mut libc::c_char, usize) -> libc::c_int
+        )
         .unwrap();
-    let mut buffer = [0u8; 64];
-    // SAFETY: buffer is writable for all 64 bytes.
-    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    assert_eq!(result, 0);
-    assert_eq!(&buffer[..10], b"test-host\0");
-    session.restore().unwrap();
+        hostname
+            .expect()
+            .with(|_, size| *size == 64)
+            .once()
+            .returning(|buffer, size| {
+                let name = b"test-host\0";
+                assert!(size >= name.len());
+                // SAFETY: the caller provides a writable buffer of this size.
+                unsafe { std::ptr::copy_nonoverlapping(name.as_ptr().cast(), buffer, name.len()) };
+                0
+            })
+            .unwrap();
+        let mut buffer = [0u8; 64];
+        // SAFETY: buffer is writable for all 64 bytes.
+        let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+        assert_eq!(result, 0);
+        assert_eq!(&buffer[..10], b"test-host\0");
+        session.restore().unwrap();
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -132,35 +134,37 @@ fn imported_system_function_is_mocked_without_a_wrapper() {
         fn GetComputerNameW(buffer: *mut u16, size: *mut u32) -> i32;
     }
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let hostname = mock!(
-        session,
-        GetComputerNameW,
-        unsafe extern "system" fn(*mut u16, *mut u32) -> i32
-    )
-    .unwrap();
-    hostname
-        .expect()
-        .once()
-        .returning(|buffer, size| {
-            let name: Vec<_> = "test-host\0".encode_utf16().collect();
-            // SAFETY: the caller supplies a valid size and a writable buffer.
-            unsafe {
-                assert!(*size as usize >= name.len());
-                std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
-                *size = (name.len() - 1) as u32;
-            }
-            1
-        })
+    for constructor in [Session::new_global, Session::new] {
+        let mut session = constructor().unwrap();
+        let hostname = mock!(
+            session,
+            GetComputerNameW,
+            unsafe extern "system" fn(*mut u16, *mut u32) -> i32
+        )
         .unwrap();
-    let mut buffer = [0u16; 64];
-    let mut size = buffer.len() as u32;
-    // SAFETY: both pointers are valid; size describes the writable buffer.
-    let result = unsafe { GetComputerNameW(buffer.as_mut_ptr(), &mut size) };
-    assert_eq!(result, 1);
-    assert_eq!(
-        String::from_utf16(&buffer[..size as usize]).unwrap(),
-        "test-host"
-    );
-    session.restore().unwrap();
+        hostname
+            .expect()
+            .once()
+            .returning(|buffer, size| {
+                let name: Vec<_> = "test-host\0".encode_utf16().collect();
+                // SAFETY: the caller supplies a valid size and a writable buffer.
+                unsafe {
+                    assert!(*size as usize >= name.len());
+                    std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
+                    *size = (name.len() - 1) as u32;
+                }
+                1
+            })
+            .unwrap();
+        let mut buffer = [0u16; 64];
+        let mut size = buffer.len() as u32;
+        // SAFETY: both pointers are valid; size describes the writable buffer.
+        let result = unsafe { GetComputerNameW(buffer.as_mut_ptr(), &mut size) };
+        assert_eq!(result, 1);
+        assert_eq!(
+            String::from_utf16(&buffer[..size as usize]).unwrap(),
+            "test-host"
+        );
+        session.restore().unwrap();
+    }
 }

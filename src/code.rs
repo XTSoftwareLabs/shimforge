@@ -3,7 +3,7 @@ use crate::Error;
 mod prefix;
 mod relocate;
 
-pub(crate) use relocate::trampoline;
+pub(crate) use relocate::{needs_call_bridge, trampoline};
 
 pub(crate) const MAX_PREFIX: usize = 32;
 const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
@@ -46,7 +46,7 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
     })
 }
 
-fn jump(source: usize, target: usize) -> Result<Vec<u8>, Error> {
+pub(crate) fn jump(source: usize, target: usize) -> Result<Vec<u8>, Error> {
     let next = source.checked_add(5).ok_or(Error::InvalidRange)?;
     let displacement = target as i128 - next as i128;
     if let Ok(relative) = i32::try_from(displacement) {

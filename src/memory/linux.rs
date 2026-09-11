@@ -1,11 +1,13 @@
 use super::{PageRange, Region, os_error, syscall};
 use crate::Error;
 
+mod maps;
+
 pub(super) fn region_at(address: usize) -> Result<Option<Region>, Error> {
     let maps = syscall(
         "query memory",
         Err(std::io::Error::from_raw_os_error(libc::EIO)),
-        || std::fs::read_to_string("/proc/self/maps"),
+        maps::read,
     )
     .map_err(|error| Error::Mapping(error.to_string()))?;
     parse_region(&maps, address)

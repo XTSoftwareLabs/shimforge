@@ -45,3 +45,21 @@ fn memory_layout_matches_windows_amd64() {
     assert_eq!(std::mem::offset_of!(MemoryInfo, size), 24);
     assert_eq!(std::mem::offset_of!(MemoryInfo, state), 32);
 }
+
+#[test]
+fn shadow_stack_query_errors_are_reported() {
+    unsafe extern "system" {
+        fn SetLastError(code: u32);
+    }
+    for code in [87, 5] {
+        fail_next("query shadow stack");
+        // SAFETY: this changes only the test thread's error code.
+        unsafe { SetLastError(code) };
+        let result = shadow_stack();
+        if code == 87 {
+            assert_eq!(result, Ok(false));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}

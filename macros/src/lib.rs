@@ -17,6 +17,80 @@ pub fn __check_signature(input: TokenStream) -> TokenStream {
     expand_check(syn::parse(input)).into()
 }
 
+#[proc_macro]
+pub fn __replace_local(input: TokenStream) -> TokenStream {
+    expand_replacement(syn::parse(input)).into()
+}
+
+struct Replacement {
+    mock: Input,
+    target: Expr,
+}
+
+impl Parse for Replacement {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let root = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let session = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let source = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let target = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let signature = input.parse()?;
+        Ok(Self {
+            mock: Input {
+                root,
+                session,
+                source,
+                signature,
+            },
+            target,
+        })
+    }
+}
+
+fn expand_replacement(input: syn::Result<Replacement>) -> Tokens {
+    let Replacement { mock, target } = match input {
+        Ok(input) => input,
+        Err(error) => return error.into_compile_error(),
+    };
+    let Input {
+        root,
+        session,
+        source,
+        signature,
+    } = mock;
+    let abi = &signature.abi;
+    let unsafety = &signature.unsafety;
+    let types: Vec<_> = (0..signature.inputs.len())
+        .map(|index| format_ident!("__Arg{index}"))
+        .collect();
+    let names: Vec<_> = (0..signature.inputs.len())
+        .map(|index| format_ident!("__arg{index}"))
+        .collect();
+    quote! {
+        {
+            struct __Site;
+            #[allow(clippy::too_many_arguments)]
+            #abi fn __dispatch<__Marker, #(#types,)* __Return>(#(#names: #types),*) -> __Return {
+                let address = __dispatch::<__Marker, #(#types,)* __Return> as *const () as usize;
+                let target = #root::__private::route(address).expect("replacement is not active");
+                #root::__invoke!(target, #abi fn(#(#types),*) -> __Return, (#(#names),*))
+            }
+            fn __install<#(#types,)* __Return>(
+                session: &mut #root::Session,
+                source: #unsafety #abi fn(#(#types),*) -> __Return,
+                target: #unsafety #abi fn(#(#types),*) -> __Return,
+            ) -> ::std::result::Result<(), #root::Error> {
+                #root::__install_replacement!(session, source as *const (),
+                    __dispatch::<__Site, #(#types,)* __Return> as *const (), target as *const ())
+            }
+            __install(#session, #source, #target)
+        }
+    }
+}
+
 fn expand_check(input: syn::Result<SignatureCheck>) -> Tokens {
     match input {
         Ok(check) => signature::check(
@@ -199,21 +273,30 @@ fn generate(input: Input) -> Tokens {
             fn meta(&self) -> &::std::sync::Arc<#root::__private::Meta> { &self.meta }
         }
 
-        static __SHIMFORGE_SLOT: ::std::sync::Mutex<
-            ::std::vec::Vec<(::std::option::Option<::std::thread::ThreadId>, ::std::sync::Arc<#root::__private::State<__ShimforgeRule>>)>
-        > = ::std::sync::Mutex::new(::std::vec::Vec::new());
+        ::std::thread_local! {
+            static __SHIMFORGE_LOCAL: ::std::cell::RefCell<::std::option::Option<::std::sync::Arc<#root::__private::State<__ShimforgeRule>>>> = const { ::std::cell::RefCell::new(::std::option::Option::None) };
+        }
+        static __SHIMFORGE_GLOBAL: ::std::sync::Mutex<::std::option::Option<::std::sync::Arc<#root::__private::State<__ShimforgeRule>>>> = ::std::sync::Mutex::new(::std::option::Option::None);
+        static __SHIMFORGE_GLOBAL_ACTIVE: ::std::sync::atomic::AtomicBool = ::std::sync::atomic::AtomicBool::new(false);
 
         #[allow(clippy::too_many_arguments)]
         #abi fn __shimforge_call #generics (#(#names: #args),*) -> #output {
-            let address = __shimforge_call as *const () as usize;
-            if let ::std::option::Option::Some(target) = #root::__private::route(address) {
-                if target != address {
+            let state = __SHIMFORGE_LOCAL.try_with(|slot| slot.try_borrow().ok().and_then(|state| state.clone())).ok().flatten()
+                .or_else(|| {
+                    if __SHIMFORGE_GLOBAL_ACTIVE.load(::std::sync::atomic::Ordering::Acquire) {
+                        #root::__private::lock(&__SHIMFORGE_GLOBAL).clone()
+                    } else {
+                        ::std::option::Option::None
+                    }
+                });
+            let state = match state {
+                ::std::option::Option::Some(state) => state,
+                ::std::option::Option::None => {
+                    let address = __shimforge_call as *const () as usize;
+                    let target = #root::__private::route(address).expect("mock is not active");
                     return #root::__invoke!(target, #callable, (#(#names),*));
                 }
-            }
-            let state = #root::__private::lock(&__SHIMFORGE_SLOT)
-                .iter().find(|entry| entry.0.is_none() || entry.0 == ::std::option::Option::Some(::std::thread::current().id()))
-                .expect("mock is not active").1.clone();
+            };
             let _call = state.enter();
             let rule = state.select(&|rule| (rule.matcher)(#(&#names),*));
             let mut action = #root::__private::lock(&rule.action);
@@ -316,14 +399,28 @@ fn generate(input: Input) -> Tokens {
             let __shimforge_session = (#session).__borrow();
             let __shimforge_thread = __shimforge_session.__thread();
             let __shimforge_state = #root::__private::State::new(::std::stringify!(#source));
-            {
-                let mut __shimforge_slot = #root::__private::lock(&__SHIMFORGE_SLOT);
-                if __shimforge_slot.iter().any(|entry| entry.0 == __shimforge_thread) {
+            let __shimforge_set = |slot: &mut ::std::option::Option<::std::sync::Arc<#root::__private::State<__ShimforgeRule>>>| {
+                if slot.is_some() {
                     return ::std::result::Result::Err(#root::Error::Expectation("mock site is already active".into()));
                 }
-                __shimforge_slot.push((__shimforge_thread, __shimforge_state.clone()));
+                *slot = ::std::option::Option::Some(__shimforge_state.clone());
+                ::std::result::Result::Ok(())
+            };
+            if __shimforge_thread.is_some() {
+                __SHIMFORGE_LOCAL.with(|slot| __shimforge_set(&mut slot.borrow_mut()))?;
+            } else {
+                __shimforge_set(&mut #root::__private::lock(&__SHIMFORGE_GLOBAL))?;
+                __SHIMFORGE_GLOBAL_ACTIVE.store(true, ::std::sync::atomic::Ordering::Release);
             }
-            let __shimforge_detach = ::std::boxed::Box::new(move || { #root::__private::lock(&__SHIMFORGE_SLOT).retain(|entry| entry.0 != __shimforge_thread); });
+            let __shimforge_detach = ::std::boxed::Box::new(move || {
+                let state = if __shimforge_thread.is_some() {
+                    __SHIMFORGE_LOCAL.with(|slot| slot.borrow_mut().take())
+                } else {
+                    __SHIMFORGE_GLOBAL_ACTIVE.store(false, ::std::sync::atomic::Ordering::Release);
+                    #root::__private::lock(&__SHIMFORGE_GLOBAL).take()
+                };
+                ::std::mem::drop(state);
+            });
             #root::__install!(__shimforge_session, __shimforge_source as *const (), __shimforge_target as *const (), __shimforge_state.clone(), __shimforge_detach)?;
             ::std::result::Result::Ok(__ShimforgeMock { state: __shimforge_state })
         })()
