@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Typed mock generation for shimforge"
-license = "MIT"
+license = "PolyForm-Small-Business-1.0.0 OR PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/XTSoftwareLabs/shimforge"
 
 [lib]
