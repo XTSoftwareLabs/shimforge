@@ -553,7 +553,30 @@ keeps the failed patch so you can retry. An expectation error is returned after 
 mocks have been removed. A failed rollback or a failed code restoration during drop
 aborts the process.
 
-MIT licensed.
+## Licensing
+
+shimforge is source-available under either of two licenses, at your option. You
+need to satisfy only one of them.
+
+- [PolyForm Small Business 1.0.0](LICENSE-POLYFORM-SMALL-BUSINESS), for a company
+  with fewer than 100 people and less than 1,000,000 USD (2019, inflation
+  adjusted) of revenue in the prior tax year. Parent companies, subsidiaries, and
+  entities under common control count together.
+- [PolyForm Noncommercial 1.0.0](LICENSE-POLYFORM-NONCOMMERCIAL), for any
+  noncommercial purpose. This covers personal study, hobby projects, and
+  research, and it covers charitable organizations, educational institutions,
+  public research organizations, and government institutions whatever their size.
+
+Under either one, use, modification, and redistribution are free of charge. Keep
+the license text with any copy you pass on.
+
+Commercial use by a company above the Small Business thresholds is not covered by
+either license. See [COMMERCIAL.md](COMMERCIAL.md) or write to
+info@xtsoftwarelabs.com.
+
+Neither license is approved by the Open Source Initiative. If your dependency
+policy allows only OSI licenses, treat shimforge as commercial software and ask
+for a license rather than assuming it is blocked.
 
 ## Contributing
 
