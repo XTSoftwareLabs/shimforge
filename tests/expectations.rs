@@ -58,6 +58,14 @@ impl Store {
     fn lookup(&self, key: &str) -> String {
         format!("{}:{key}", self.prefix)
     }
+
+    fn measure(&self, key: &str, length: &mut usize) {
+        *length = self.prefix.len() + key.len();
+    }
+}
+
+fn purge(generation: u32) {
+    panic!("generation {generation} must never be purged in a test");
 }
 
 struct DropCount(Arc<AtomicUsize>);
@@ -327,6 +335,69 @@ fn callbacks_can_write_output_parameters() {
     let mut buffer = [9; 4];
     assert_eq!(fill(&mut buffer), 3);
     assert_eq!(buffer, [b'a', b'b', b'c', 9]);
+}
+
+#[test]
+fn unit_results_skip_the_original_body_and_still_count_calls() {
+    let _serial = serial_test();
+    let mut session = Session::new_global().unwrap();
+    let purges = mock!(session, purge, fn(u32)).unwrap();
+    let expected = purges
+        .expect()
+        .with(|generation| *generation == 4)
+        .times(2)
+        .returns_default()
+        .unwrap();
+    purge(4);
+    purge(4);
+    assert_eq!(expected.calls(), 2);
+    session.verify().unwrap();
+}
+
+#[test]
+fn an_extra_call_to_a_unit_function_is_rejected() {
+    let _serial = serial_test();
+    let mut session = Session::new_global().unwrap();
+    let purges = mock!(session, purge, fn(u32)).unwrap();
+    let expected = purges.expect().once().returns_default().unwrap();
+    purge(4);
+    assert!(catch_unwind(|| purge(4)).is_err());
+    assert_eq!(expected.calls(), 1);
+    assert!(session.restore().is_err());
+}
+
+#[test]
+fn a_missing_call_to_a_unit_function_fails_verification() {
+    let _serial = serial_test();
+    let mut session = Session::new_global().unwrap();
+    let purges = mock!(session, purge, fn(u32)).unwrap();
+    purges.expect().times(3).returns_default().unwrap();
+    purge(1);
+    purge(2);
+    assert!(purges.verify().is_err());
+    assert!(session.restore().is_err());
+}
+
+#[test]
+fn a_method_can_fill_an_output_parameter_without_returning() {
+    let _serial = serial_test();
+    let mut session = Session::new_global().unwrap();
+    let measures = mock!(session, Store::measure, fn(&Store, &str, &mut usize)).unwrap();
+    measures
+        .expect()
+        .with(|store, key, _| store.prefix == "cache" && **key == *"port")
+        .once()
+        .returning(|store, key, length| *length = store.prefix.len() * key.len())
+        .unwrap();
+    let store = Store {
+        prefix: String::from("cache"),
+    };
+    let mut length = 0;
+    store.measure("port", &mut length);
+    assert_eq!(length, 20);
+    session.restore().unwrap();
+    store.measure("port", &mut length);
+    assert_eq!(length, 9);
 }
 
 #[test]
