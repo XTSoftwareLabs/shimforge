@@ -108,8 +108,7 @@ pub(super) fn flush(_address: usize, _length: usize) -> Result<(), Error> {
             code: libc::EIO,
         });
     }
-    // x86-64 keeps code and data caches in sync. Target calls are stopped during writes.
-    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    crate::cache::flush(_address, _length);
     Ok(())
 }
 

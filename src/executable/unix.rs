@@ -59,8 +59,7 @@ pub(super) fn seal(address: usize) -> Result<(), Error> {
     if result != 0 {
         return Err(os_error("protect trampoline"));
     }
-    // x86 keeps instruction and data caches coherent.
-    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    crate::cache::flush(address, CAPACITY);
     Ok(())
 }
 

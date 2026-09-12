@@ -1,8 +1,10 @@
+#[cfg(target_arch = "x86_64")]
 use super::{os_error, syscall};
 use crate::Error;
 
 pub(super) use super::unix::{allocate, release, seal};
 
+#[cfg(target_arch = "x86_64")]
 pub(super) fn shadow_stack() -> Result<bool, Error> {
     query_shadow_stack(&mut |flags| {
         // SAFETY: ARCH_SHSTK_STATUS writes one unsigned long to this valid pointer.
@@ -12,6 +14,7 @@ pub(super) fn shadow_stack() -> Result<bool, Error> {
     })
 }
 
+#[cfg(target_arch = "x86_64")]
 fn query_shadow_stack(query: &mut dyn FnMut(&mut usize) -> libc::c_long) -> Result<bool, Error> {
     let mut flags = 0usize;
     let result = query(&mut flags);
@@ -31,5 +34,10 @@ fn query_shadow_stack(query: &mut dyn FnMut(&mut usize) -> libc::c_long) -> Resu
     Ok(flags & 1 != 0)
 }
 
-#[cfg(test)]
+#[cfg(target_arch = "aarch64")]
+pub(super) fn shadow_stack() -> Result<bool, Error> {
+    Ok(false)
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests;

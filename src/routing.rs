@@ -146,6 +146,8 @@ pub(crate) unsafe fn install_replacement(
                 address,
                 original: plan.original,
                 replacement: plan.replacement,
+                #[cfg(target_arch = "aarch64")]
+                _relay: None,
             },
             dispatcher,
             original,

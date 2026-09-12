@@ -9,7 +9,14 @@ fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
     let _serial = crate::tests::serial();
     let target = target as *const () as usize;
     let mut page = Executable::near(target).unwrap();
-    page.publish(&[0x90; 64]).unwrap();
+    #[cfg(target_arch = "x86_64")]
+    let bytes = vec![0x90; 64];
+    #[cfg(target_arch = "aarch64")]
+    let bytes: Vec<_> = [0xd503201fu32; 16]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    page.publish(&bytes).unwrap();
     let source = page.address() + 16;
     // SAFETY: test-owned code is never called while these routes are installed.
     unsafe {
@@ -23,7 +30,10 @@ fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
         assert_eq!(install(page.address(), source), Err(Error::Overlap));
         // A different dispatcher must not hide a prefix that overlaps the first.
         let other = Executable::near as *const () as usize;
+        #[cfg(target_arch = "x86_64")]
         assert_eq!(install(source - 1, other), Err(Error::Overlap));
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(install(source - 1, other), Err(Error::InvalidRange));
         assert_eq!(install(page.address(), target), Err(Error::Overlap));
         remove(source);
     }
@@ -52,15 +62,22 @@ fn conditional_entry_branches_execute_on_unmocked_threads() {
         99
     }
     let mut page = Executable::near(fake as *const () as usize).unwrap();
+    #[cfg(target_arch = "x86_64")]
     let argument = if cfg!(target_os = "windows") {
         0xc9
     } else {
         0xff
     };
-    page.publish(&[
+    #[cfg(target_arch = "x86_64")]
+    let bytes = vec![
         0x31, 0xc0, 0x85, argument, 0x74, 6, 0xb8, 42, 0, 0, 0, 0xc3, 0xc3,
-    ])
-    .unwrap();
+    ];
+    #[cfg(target_arch = "aarch64")]
+    let bytes: Vec<_> = [0x34000040u32, 0x52800540, 0xd65f03c0]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    page.publish(&bytes).unwrap();
     // SAFETY: the page contains a complete C function with this signature.
     let source: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(page.address()) };
     assert_eq!(source(0), 0);
@@ -86,6 +103,7 @@ fn conditional_entry_branches_execute_on_unmocked_threads() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn a_relocated_call_returns_to_the_original_function() {
     let _serial = crate::tests::serial();
     extern "C" fn callee(value: i32) -> i32 {
@@ -128,7 +146,11 @@ fn unsupported_prefixes_do_not_leave_routes() {
     let _serial = crate::tests::serial();
     let target = unsupported_prefixes_do_not_leave_routes as *const () as usize;
     let mut page = Executable::near(target).unwrap();
-    page.publish(&[0xe3, 0, 0x90, 0x90, 0x90, 0xc3]).unwrap();
+    #[cfg(target_arch = "x86_64")]
+    let bytes = vec![0xe3, 0, 0x90, 0x90, 0x90, 0xc3];
+    #[cfg(target_arch = "aarch64")]
+    let bytes = vec![0; 8];
+    page.publish(&bytes).unwrap();
     // SAFETY: this test-owned entry is inspected but never called.
     let result = unsafe { install(page.address(), target) };
     assert_eq!(result, Err(Error::InvalidInstruction));

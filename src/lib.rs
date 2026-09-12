@@ -2,12 +2,14 @@
 #![deny(missing_docs)]
 
 #[cfg(not(all(
-    target_arch = "x86_64",
+    any(target_arch = "x86_64", target_arch = "aarch64"),
     any(target_os = "windows", target_os = "linux", target_os = "macos")
 )))]
-compile_error!("shimforge supports Windows, Linux, and macOS on x86-64");
+compile_error!("shimforge supports Windows, Linux, and macOS on x86-64 and ARM64");
 
 mod asynchronous;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod cache;
 mod code;
 mod error;
 mod executable;
@@ -58,6 +60,8 @@ struct Patch {
     address: usize,
     original: Vec<u8>,
     replacement: Vec<u8>,
+    #[cfg(target_arch = "aarch64")]
+    _relay: Option<executable::Executable>,
 }
 
 struct OwnedMock {
@@ -226,6 +230,14 @@ impl Session {
         }
         memory::read(target, 1)?;
         let bytes = memory::read(source, code::MAX_PREFIX)?;
+        #[cfg(target_arch = "aarch64")]
+        let relay = {
+            let mut relay = executable::Executable::near(source)?;
+            relay.publish(&code::jump(relay.address(), target)?)?;
+            relay
+        };
+        #[cfg(target_arch = "aarch64")]
+        let target = relay.address();
         let plan = code::plan(source, target, &bytes)?;
         let address = source.checked_add(plan.offset).ok_or(Error::InvalidRange)?;
         let end = address
@@ -250,6 +262,8 @@ impl Session {
             address,
             original: plan.original,
             replacement: plan.replacement,
+            #[cfg(target_arch = "aarch64")]
+            _relay: Some(relay),
         });
         Ok(())
     }

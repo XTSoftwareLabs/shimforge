@@ -17,8 +17,11 @@ mod windows;
 #[cfg(target_os = "windows")]
 use windows as platform;
 
-const CAPACITY: usize = 4096;
+const CAPACITY: usize = 16384;
+#[cfg(target_arch = "x86_64")]
 const REACH: usize = 1 << 30;
+#[cfg(target_arch = "aarch64")]
+const REACH: usize = (1 << 27) - CAPACITY;
 
 pub(crate) fn check_call_bridge() -> Result<(), Error> {
     check_shadow_stack(platform::shadow_stack()?)

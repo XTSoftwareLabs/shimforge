@@ -130,4 +130,5 @@ pub(crate) fn needs_call_bridge(original: &[u8]) -> Result<bool, Error> {
 }
 
 #[cfg(test)]
+#[path = "relocate/tests.rs"]
 mod tests;

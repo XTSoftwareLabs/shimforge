@@ -1,9 +1,15 @@
 use super::{PageRange, Region, syscall};
 use crate::Error;
 
+#[cfg(target_arch = "aarch64")]
+mod remap;
+#[cfg(target_arch = "aarch64")]
+pub(super) use remap::replace_pages;
+
 const SUCCESS: i32 = 0;
 const INVALID_ADDRESS: i32 = 1;
 const FAILURE: i32 = 5;
+#[cfg(target_arch = "x86_64")]
 const COPY: i32 = 0x10;
 
 #[repr(C, packed(4))]
@@ -46,6 +52,7 @@ unsafe extern "C" {
         output: u64,
         copied: *mut u64,
     ) -> i32;
+    #[cfg(target_arch = "x86_64")]
     fn mach_vm_protect(task: u32, address: u64, size: u64, maximum: u32, protection: i32) -> i32;
 }
 
@@ -120,6 +127,7 @@ pub(super) fn page_size() -> Result<usize, Error> {
     })
 }
 
+#[cfg(target_arch = "x86_64")]
 pub(super) fn protect(page: PageRange, writable: bool) -> Result<(), Error> {
     let protection = page.protection as i32 | if writable { libc::PROT_WRITE | COPY } else { 0 };
     // SAFETY: the caller keeps these pages mapped. COPY makes text changes private.
@@ -137,8 +145,7 @@ pub(super) fn protect(page: PageRange, writable: bool) -> Result<(), Error> {
 
 pub(super) fn flush(_address: usize, _length: usize) -> Result<(), Error> {
     let result = syscall("flush instruction cache", FAILURE, || {
-        // x86-64 keeps code and data caches in sync. Target calls are stopped.
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        crate::cache::flush(_address, _length);
         SUCCESS
     });
     check("flush instruction cache", result)

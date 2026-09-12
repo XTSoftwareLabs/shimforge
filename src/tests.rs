@@ -186,6 +186,7 @@ fn unrecoverable_drop_selects_the_fatal_policy() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn decoder_preserves_complete_instructions_and_cet() {
     let bytes = [0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x20, 0xc3];
     let plan = code::plan(0x1000, 0x2000, &bytes).unwrap();
@@ -201,6 +202,7 @@ fn decoder_preserves_complete_instructions_and_cet() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn decoder_handles_near_boundaries_and_far_jumps() {
     let source = 0x1_0000_0000usize;
     let bytes = [0x90; 32];
@@ -220,6 +222,7 @@ fn decoder_handles_near_boundaries_and_far_jumps() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn decoder_rejects_short_invalid_and_overflowing_entries() {
     for bytes in [
         &[][..],

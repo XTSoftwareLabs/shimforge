@@ -27,14 +27,22 @@ fn page_is_near_owned_and_executable() {
     assert!(page.address().abs_diff(source) <= REACH);
     assert_eq!(page.publish(&[]), Err(Error::InvalidRange));
     assert_eq!(page.publish(&[0; CAPACITY + 1]), Err(Error::InvalidRange));
-    page.publish(&[0xf3, 0x0f, 0x1e, 0xfa, 0xb8, 42, 0, 0, 0, 0xc3])
-        .unwrap();
-    // SAFETY: These bytes form a complete x86-64 fn() -> u32 in an RX page.
+    #[cfg(target_arch = "x86_64")]
+    let bytes = vec![0xf3, 0x0f, 0x1e, 0xfa, 0xb8, 42, 0, 0, 0, 0xc3];
+    #[cfg(target_arch = "aarch64")]
+    let bytes: Vec<_> = [0xd503245fu32, 0x52800540, 0xd65f03c0]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    page.publish(&bytes).unwrap();
+    // SAFETY: These bytes form a complete fn() -> u32 in an RX page.
     let call: fn() -> u32 = unsafe { std::mem::transmute(page.address()) };
     assert_eq!(call(), 42);
     assert_eq!(page.publish(&[0xc3]), Err(Error::InvalidRange));
-    let bytes = crate::memory::read(page.address(), 10).unwrap();
-    assert_eq!(bytes, [0xf3, 0x0f, 0x1e, 0xfa, 0xb8, 42, 0, 0, 0, 0xc3]);
+    assert_eq!(
+        crate::memory::read(page.address(), bytes.len()).unwrap(),
+        bytes
+    );
 }
 
 #[test]

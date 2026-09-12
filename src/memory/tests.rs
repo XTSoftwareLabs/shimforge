@@ -22,7 +22,7 @@ pub(super) fn should_fail(operation: &'static str) -> bool {
     })
 }
 
-struct Inject;
+pub(crate) struct Inject;
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -66,7 +66,7 @@ fn local_installation_errors_can_be_retried_and_cleanup_does_not_write_code() {
 }
 
 impl Inject {
-    fn new(failures: &[(&'static str, usize)]) -> Self {
+    pub(crate) fn new(failures: &[(&'static str, usize)]) -> Self {
         FAULTS.with(|faults| {
             *faults.borrow_mut() = Faults {
                 failures: failures.to_vec(),
@@ -90,8 +90,10 @@ struct Allocation {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const RX: u32 = (libc::PROT_READ | libc::PROT_EXEC) as u32;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", all(target_os = "macos", target_arch = "x86_64")))]
 const RWX: u32 = (libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) as u32;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const RWX: u32 = RX;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const RO: u32 = libc::PROT_READ as u32;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -114,7 +116,7 @@ impl Allocation {
             let pointer = libc::mmap(
                 std::ptr::null_mut(),
                 page_size * 3,
-                RWX as i32,
+                libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
                 0,
@@ -134,6 +136,7 @@ impl Allocation {
         unsafe { std::ptr::write_bytes(address as *mut u8, 0x90, page_size * 3) };
         let allocation = Self { address, page_size };
         allocation.protect(0, RX);
+        allocation.protect(1, RWX);
         allocation.protect(2, NONE);
         allocation
     }
@@ -330,6 +333,7 @@ fn errors_before_modification_leave_bytes_and_permissions_unchanged() {
 }
 
 #[test]
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn partial_permission_change_failure_rolls_back_changed_pages() {
     let memory = Allocation::new();
     let address = memory.address + memory.page_size - 2;
@@ -371,6 +375,7 @@ fn fatal_for_test() -> ! {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     let _serial = crate::tests::serial();
     let memory = Allocation::new();
@@ -409,11 +414,13 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     memory.assert_unchanged(memory.address, 32);
 }
 
+#[cfg(target_arch = "x86_64")]
 extern "C" fn native_replacement() -> u32 {
     93
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn a_generated_cet_function_can_execute_replace_and_restore() {
     let _serial = crate::tests::serial();
     let memory = Allocation::new();

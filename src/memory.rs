@@ -116,39 +116,46 @@ unsafe fn replace(
         })
         .collect();
 
-    for (index, page) in pages.iter().enumerate() {
-        if let Err(error) = platform::protect(*page, true) {
-            restore_permissions(&pages[..index], fatal);
-            return Err(error);
-        }
-    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    return platform::replace_pages(address, replacement, &pages, fatal);
 
-    // SAFETY: The pages are writable and only this call can change them.
-    unsafe { std::ptr::copy(replacement.as_ptr(), address as *mut u8, replacement.len()) };
-    let result = platform::flush(address, replacement.len()).and_then(|()| {
-        pages
-            .iter()
-            .try_for_each(|page| platform::protect(*page, false))
-    });
-    if let Err(error) = result {
-        for page in &pages {
-            if platform::protect(*page, true).is_err() {
-                fatal();
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        for (index, page) in pages.iter().enumerate() {
+            if let Err(error) = platform::protect(*page, true) {
+                restore_permissions(&pages[..index], fatal);
+                return Err(error);
             }
         }
-        // SAFETY: The pages are writable again. The saved bytes are in a separate buffer.
-        unsafe {
-            std::ptr::copy_nonoverlapping(original.as_ptr(), address as *mut u8, original.len())
-        };
-        if platform::flush(address, original.len()).is_err() {
-            fatal();
+
+        // SAFETY: The pages are writable and only this call can change them.
+        unsafe { std::ptr::copy(replacement.as_ptr(), address as *mut u8, replacement.len()) };
+        let result = platform::flush(address, replacement.len()).and_then(|()| {
+            pages
+                .iter()
+                .try_for_each(|page| platform::protect(*page, false))
+        });
+        if let Err(error) = result {
+            for page in &pages {
+                if platform::protect(*page, true).is_err() {
+                    fatal();
+                }
+            }
+            // SAFETY: The pages are writable again. The saved bytes are in a separate buffer.
+            unsafe {
+                std::ptr::copy_nonoverlapping(original.as_ptr(), address as *mut u8, original.len())
+            };
+            if platform::flush(address, original.len()).is_err() {
+                fatal();
+            }
+            restore_permissions(&pages, fatal);
+            return Err(error);
         }
-        restore_permissions(&pages, fatal);
-        return Err(error);
+        Ok(())
     }
-    Ok(())
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn restore_permissions(pages: &[PageRange], fatal: fn() -> !) {
     for page in pages {
         if platform::protect(*page, false).is_err() {

@@ -258,4 +258,5 @@ impl Reader<'_> {
 }
 
 #[cfg(test)]
+#[path = "prefix/tests.rs"]
 mod tests;
