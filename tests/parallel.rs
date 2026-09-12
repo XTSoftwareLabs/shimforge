@@ -82,9 +82,9 @@ fn repeated_cleanup_does_not_interrupt_other_threads() {
 
 #[test]
 fn calls_from_another_thread_are_safe_during_setup_and_teardown() {
-    // Only the first mock for a function patches its code, and no thread may
-    // call the target during that patch. Install once here so the reader below
-    // starts after the entry is in place.
+    // Only the first mock for a function patches its code, and a thread must not
+    // execute the entry while those bytes are written. Install once here so the
+    // reader below never races that write; later installs reuse the same entry.
     {
         let mut session = Session::new().unwrap();
         let mock = mock!(session, value, fn(u64) -> u64).unwrap();

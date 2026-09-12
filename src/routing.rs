@@ -157,11 +157,21 @@ pub(crate) unsafe fn install_replacement(
         });
         let sites = vec![dispatcher];
         entries.reserve(1);
-        // SAFETY: the caller stops calls during the first entry patch.
-        unsafe { memory::write(address, &entry.patch.original, &entry.patch.replacement)? };
         let entry = Box::leak(entry);
+        let previous = entry.next;
+        // Publish the route before patching. A thread that reaches the dispatcher
+        // while the entry is being written must still find the saved original.
         HEAD.store(entry, Ordering::Release);
         let entry: &'static Entry = entry;
+        // SAFETY: the caller stops calls during the first entry patch.
+        let written =
+            unsafe { memory::write(address, &entry.patch.original, &entry.patch.replacement) };
+        if let Err(error) = written {
+            // The source is unpatched again, so nothing reaches this entry. It stays
+            // allocated because a thread may still hold it from the failed window.
+            HEAD.store(previous, Ordering::Release);
+            return Err(error);
+        }
         entries.push(Record { entry, sites });
         entry
     };
