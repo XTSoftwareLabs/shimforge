@@ -1,22 +1,9 @@
 name: CI
 
 on:
+  # No path filter here: main requires these checks, so every pull request must report them.
   pull_request:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'macros/**'
-      - 'tests/**'
-      - 'examples/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'README.md'
-      - 'rust-toolchain*'
-      - 'rustfmt.toml'
-      - '.cargo/**'
-      - '.gitattributes'
-      - 'scripts/**'
-      - '.github/workflows/ci.yml'
   push:
     branches: [main]
     paths:
