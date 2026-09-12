@@ -4,10 +4,15 @@ fn target(value: u64) -> u64 {
     value.wrapping_add(5)
 }
 
+// Kept out of every mock so the overlap checks below start from a clean entry.
+fn probe(value: u64) -> u64 {
+    value.wrapping_sub(5)
+}
+
 #[test]
 fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
     let _serial = crate::tests::serial();
-    let target = target as *const () as usize;
+    let target = probe as *const () as usize;
     let mut page = Executable::near(target).unwrap();
     #[cfg(target_arch = "x86_64")]
     let bytes = vec![0x90; 64];
@@ -22,7 +27,8 @@ fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
     unsafe {
         assert_eq!(install(source, source), Err(Error::SameAddress));
         assert_eq!(install(source, 0), Err(Error::InvalidAddress));
-        assert_eq!(install(0, target), Err(Error::InvalidAddress));
+        // The page holds no route yet, so an unreadable source is the only fault.
+        assert_eq!(install(0, page.address()), Err(Error::InvalidAddress));
         install(source, target).unwrap();
         assert!(route(target).is_some_and(|address| address != target));
         assert_eq!(install(source, target), Err(Error::Overlap));

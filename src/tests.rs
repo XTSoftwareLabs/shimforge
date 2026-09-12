@@ -74,6 +74,11 @@ fn replacement(value: u64) -> u64 {
     value.wrapping_add(207)
 }
 
+// Never mocked in a local session, so a global session always patches its code.
+fn retried(value: u64) -> u64 {
+    value.wrapping_add(41)
+}
+
 #[test]
 fn all_errors_are_useful() {
     let cases = [
@@ -165,13 +170,13 @@ fn installation_errors_do_not_change_the_target() {
 fn failed_restoration_keeps_ownership_for_retry() {
     let _serial = serial();
     let mut session = Session::new_global().unwrap();
-    replace!(session, original => replacement, fn(u64) -> u64).unwrap();
+    replace!(session, retried => replacement, fn(u64) -> u64).unwrap();
     session.patches[0].replacement[0] ^= 1;
     assert_eq!(session.restore(), Err(Error::MemoryChanged));
     assert_eq!(session.patches.len(), 1);
     session.patches[0].replacement[0] ^= 1;
     session.restore().unwrap();
-    assert_eq!(original(0), 109);
+    assert_eq!(retried(0), 41);
 }
 
 #[test]

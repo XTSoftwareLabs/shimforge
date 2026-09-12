@@ -496,3 +496,38 @@ fn system_abi_and_unsafe_native_functions_are_supported() {
     // SAFETY: Both test functions accept any pair of i64 values.
     assert_eq!(unsafe { unsafe_native_sum(6, 7) }, 13);
 }
+
+fn scaled(value: i64) -> i64 {
+    value * 2
+}
+
+fn scaled_twice(value: i64) -> i64 {
+    value * 4
+}
+
+#[test]
+fn raw_replacement_skips_the_signature_check_and_reaches_every_thread() {
+    let _serial = serial_test();
+    let mut session = Session::new_global().unwrap();
+    // SAFETY: both functions are live, share a signature, and stay loaded while
+    // the session holds the patch. No thread calls them during installation.
+    unsafe {
+        session
+            .replace_raw(scaled as *const (), scaled_twice as *const ())
+            .unwrap();
+    }
+    assert_eq!(scaled(5), 20);
+    assert_eq!(std::thread::spawn(|| scaled(5)).join().unwrap(), 20);
+    session.restore().unwrap();
+    assert_eq!(scaled(5), 10);
+}
+
+#[test]
+fn raw_replacement_rejects_a_local_session() {
+    let _serial = serial_test();
+    let mut session = Session::new_local().unwrap();
+    // SAFETY: both pointers are live functions; local mode refuses before access.
+    let result = unsafe { session.replace_raw(scaled as *const (), scaled_twice as *const ()) };
+    assert!(matches!(result, Err(Error::Expectation(_))));
+    assert_eq!(scaled(5), 10);
+}
