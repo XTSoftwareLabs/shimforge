@@ -99,6 +99,11 @@ fn branches_and_calls_keep_their_targets() {
         trampoline(source, destination, &bytes(&[0xd63f03c0])),
         Err(Error::InvalidInstruction)
     );
+    // Consistent conditional branches set bit 4, and relocating them needs a decoder.
+    assert_eq!(
+        trampoline(source, destination, &bytes(&[0x54000010])),
+        Err(Error::InvalidInstruction)
+    );
     assert_eq!(
         trampoline(source, source + (1 << 28), &bytes(&[NOP])),
         Err(Error::InvalidRange)
