@@ -1,80 +1,127 @@
-//! Configuration read from environment variables, tested without setting any.
+//! Home-directory handling tested without writing `HOME`.
 //!
-//! In the 2024 edition `env::set_var` is `unsafe`, and it changes the environment
-//! of the whole test process, so tests that set variables race each other unless
-//! they run one at a time. Mocking `env::var` gives each test thread its own
-//! values instead: nothing is written, no `unsafe` is needed, and the tests below
-//! still run in parallel.
+//! Tests that point `HOME` somewhere else usually call `env::set_var`, which is
+//! `unsafe` in the 2024 edition and changes the environment of the whole test
+//! process. Tests running in parallel then read each other's value and fail at
+//! random, so projects add environment locks, run those tests one at a time, or
+//! change the code to take the home directory as a parameter. Mocking
+//! `env::var_os` gives each test thread its own `HOME` instead: nothing is
+//! written, no `unsafe` is needed, and the tests below still run in parallel.
 
 #![forbid(unsafe_code)]
 
 use shimforge::{Session, mock};
-use std::env::{self, VarError};
+use std::env;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Barrier;
 use std::thread;
 
 // Business code below reads the process environment directly and stays unchanged.
 
-#[derive(Debug, PartialEq)]
-enum LogLevel {
-    Error,
-    Info,
-    Debug,
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
 }
 
-fn log_level() -> LogLevel {
-    match env::var("ORDERS_LOG_LEVEL").as_deref() {
-        Ok("error") => LogLevel::Error,
-        Ok("debug") => LogLevel::Debug,
-        _ => LogLevel::Info,
+/// Shows a path with the home directory shortened to `~`.
+fn display_path(path: &Path) -> String {
+    let Some(home) = home_dir() else {
+        return path.display().to_string();
+    };
+    match path.strip_prefix(&home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Ok(rest) => {
+            let parts: Vec<_> = rest.iter().map(|part| part.to_string_lossy()).collect();
+            format!("~/{}", parts.join("/"))
+        }
+        Err(_) => path.display().to_string(),
     }
 }
 
-fn database_url() -> Result<String, String> {
-    let host = env::var("ORDERS_DB_HOST").map_err(|error| format!("ORDERS_DB_HOST: {error}"))?;
-    let port = env::var("ORDERS_DB_PORT").unwrap_or_else(|_| "5432".to_owned());
-    Ok(format!("postgres://{host}:{port}/orders"))
-}
-
 #[test]
-fn a_log_level_is_read_without_setting_the_variable() {
+fn a_path_under_home_is_shortened() {
     let mut session = Session::new();
-    let var = mock!(
-        session,
-        env::var::<&str>,
-        fn(&str) -> Result<String, VarError>
-    );
-    var.expect()
-        .with(|name| *name == "ORDERS_LOG_LEVEL")
+    let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+    var_os
+        .expect()
+        .with(|name| *name == "HOME")
         .once()
-        .returns(Ok("debug".to_owned()));
+        .returns(Some(OsString::from("/home/ops")));
 
-    assert_eq!(log_level(), LogLevel::Debug);
+    assert_eq!(
+        display_path(Path::new("/home/ops/projects/shimforge")),
+        "~/projects/shimforge"
+    );
     session.verify();
 }
 
 #[test]
-fn parallel_threads_each_see_their_own_value() {
+fn home_itself_is_shown_as_a_tilde() {
+    let mut session = Session::new();
+    let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+    var_os
+        .expect()
+        .with(|name| *name == "HOME")
+        .once()
+        .returns(Some(OsString::from("/home/ops")));
+
+    assert_eq!(display_path(Path::new("/home/ops")), "~");
+    session.verify();
+}
+
+#[test]
+fn a_sibling_that_shares_the_prefix_is_left_alone() {
+    let mut session = Session::new();
+    let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+    var_os
+        .expect()
+        .with(|name| *name == "HOME")
+        .once()
+        .returns(Some(OsString::from("/home/ops")));
+
+    assert_eq!(
+        display_path(Path::new("/home/opsx/notes")),
+        "/home/opsx/notes"
+    );
+    session.verify();
+}
+
+#[test]
+fn an_unset_or_empty_home_leaves_paths_alone() {
+    let mut session = Session::new();
+    let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+    var_os.expect().once().returns(None);
+    var_os.expect().once().returns(Some(OsString::new()));
+
+    assert_eq!(display_path(Path::new("/home/ops/logs")), "/home/ops/logs");
+    assert_eq!(display_path(Path::new("/home/ops/logs")), "/home/ops/logs");
+    session.verify();
+}
+
+#[test]
+fn parallel_threads_each_get_their_own_home() {
     let start = Barrier::new(3);
     thread::scope(|scope| {
-        for (value, level) in [
-            ("error", LogLevel::Error),
-            ("info", LogLevel::Info),
-            ("debug", LogLevel::Debug),
+        for (home, shown) in [
+            ("/home/ci", "~/logs"),
+            ("/home", "~/ci/logs"),
+            ("/srv", "/home/ci/logs"),
         ] {
             let start = &start;
             scope.spawn(move || {
                 let mut session = Session::new();
-                let var = mock!(
-                    session,
-                    env::var::<&str>,
-                    fn(&str) -> Result<String, VarError>
-                );
-                var.expect().times(100).returns(Ok(value.to_owned()));
+                let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+                var_os
+                    .expect()
+                    .with(|name| *name == "HOME")
+                    .times(100)
+                    .returns(Some(OsString::from(home)));
                 // Start reading together so the three threads really overlap.
                 start.wait();
                 for _ in 0..100 {
-                    assert_eq!(log_level(), level);
+                    assert_eq!(display_path(Path::new("/home/ci/logs")), shown);
                 }
                 session.verify();
             });
@@ -83,67 +130,16 @@ fn parallel_threads_each_see_their_own_value() {
 }
 
 #[test]
-fn an_unset_port_falls_back_to_the_default() {
+fn other_threads_still_see_the_real_home() {
     let mut session = Session::new();
-    let var = mock!(
-        session,
-        env::var::<&str>,
-        fn(&str) -> Result<String, VarError>
-    );
-    var.expect()
-        .with(|name| *name == "ORDERS_DB_HOST")
-        .once()
-        .returns(Ok("orders-db.internal".to_owned()));
-    var.expect()
-        .with(|name| *name == "ORDERS_DB_PORT")
-        .once()
-        .returns(Err(VarError::NotPresent));
+    let var_os = mock!(session, env::var_os::<&str>, fn(&str) -> Option<OsString>);
+    var_os
+        .expect()
+        .with(|name| *name == "HOME")
+        .returns(Some(OsString::from("/home/ops")));
+    assert_eq!(display_path(Path::new("/home/ops")), "~");
 
-    assert_eq!(
-        database_url().unwrap(),
-        "postgres://orders-db.internal:5432/orders"
-    );
-    session.verify();
-}
-
-#[test]
-fn a_missing_host_is_reported_by_name() {
-    let mut session = Session::new();
-    let var = mock!(
-        session,
-        env::var::<&str>,
-        fn(&str) -> Result<String, VarError>
-    );
-    // Reading any other variable would be an unmatched call and fail the test.
-    var.expect()
-        .with(|name| *name == "ORDERS_DB_HOST")
-        .once()
-        .returns(Err(VarError::NotPresent));
-
-    assert_eq!(
-        database_url().unwrap_err(),
-        "ORDERS_DB_HOST: environment variable not found"
-    );
-    session.verify();
-}
-
-#[test]
-fn threads_without_a_session_read_the_real_environment() {
-    let mut session = Session::new();
-    let var = mock!(
-        session,
-        env::var::<&str>,
-        fn(&str) -> Result<String, VarError>
-    );
-    var.expect().returns(Ok("debug".to_owned()));
-    assert_eq!(log_level(), LogLevel::Debug);
-
-    // Nothing was written to the process environment, so other threads see it unset.
-    assert_eq!(thread::spawn(log_level).join().unwrap(), LogLevel::Info);
-    assert_eq!(
-        thread::spawn(|| env::var("ORDERS_LOG_LEVEL"))
-            .join()
-            .unwrap(),
-        Err(VarError::NotPresent)
-    );
+    // Nothing was written to the process environment.
+    let real = thread::spawn(|| env::var_os("HOME")).join().unwrap();
+    assert_ne!(real, Some(OsString::from("/home/ops")));
 }
