@@ -1,5 +1,11 @@
 # shimforge
 
+[![CI](https://github.com/XTSoftwareLabs/shimforge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/XTSoftwareLabs/shimforge/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/shimforge.svg)](https://crates.io/crates/shimforge)
+[![docs.rs](https://img.shields.io/docsrs/shimforge)](https://docs.rs/shimforge)
+[![License: PolyForm](https://img.shields.io/badge/license-PolyForm-blue.svg)](#licensing)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://github.com/XTSoftwareLabs/shimforge/blob/main/Cargo.toml)
+
 Write unit tests without adding a test only trait or changing the existing production code.
 
 ## Why shimforge
