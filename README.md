@@ -1,10 +1,6 @@
 # shimforge
 
-Change what a Rust function does while a test runs, without adding a trait and
-without touching the code under test.
-
-The only runtime crate dependency is `libc` on Linux and macOS. Macro generation uses
-`syn`, `quote`, and `proc-macro2` at build time. The library currently uses `std`.
+Write unit tests without adding a test only trait or changing the existing production code.
 
 ## Why shimforge
 
