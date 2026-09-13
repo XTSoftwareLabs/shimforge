@@ -6,7 +6,7 @@
 [![License: PolyForm](https://img.shields.io/badge/license-PolyForm-blue.svg)](#licensing)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://github.com/XTSoftwareLabs/shimforge/blob/main/Cargo.toml)
 
-Write unit tests without adding a test only trait or changing the existing production code.
+Test Rust code without test-only traits or changes to production code.
 
 ## Why shimforge
 
