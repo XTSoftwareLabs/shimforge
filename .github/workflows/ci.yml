@@ -105,8 +105,7 @@ jobs:
       - run: cargo check --workspace --all-targets --locked
 
   # Runtime checks for undefined behaviour, set up like crossbeam's CI. They need a
-  # pinned nightly. -Znext-solver=coherence keeps the previous trait solver, which
-  # older mock! expansions need; drop it once the signature check no longer does.
+  # pinned nightly, which also checks mock! against the next-generation trait solver.
   careful:
     name: cargo careful (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -116,7 +115,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2022, macos-15]
     env:
-      RUSTFLAGS: -Z randomize-layout -Znext-solver=coherence
+      RUSTFLAGS: -Z randomize-layout
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -150,7 +149,6 @@ jobs:
             target: x86_64-unknown-linux-gnutsan
             build-std: -Z build-std
     env:
-      RUSTFLAGS: -Znext-solver=coherence
       ASAN_OPTIONS: detect_stack_use_after_return=1
       LSAN_OPTIONS: suppressions=${{ github.workspace }}/scripts/lsan-suppressions.txt
       TSAN_OPTIONS: enable_adaptive_delay=1
