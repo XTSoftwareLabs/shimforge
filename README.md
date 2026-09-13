@@ -525,8 +525,8 @@ and [`tests/io.rs`](tests/io.rs). Imported OS and C runtime calls are covered by
 
 ## Licensing
 
-shimforge is source-available under either of two licenses, at your option. You
-need to satisfy only one of them.
+shimforge is copyright XT SOFTWARE LABS LLC and source-available under either of
+two licenses, at your option. You need to satisfy only one of them.
 
 - [PolyForm Small Business 1.0.0](LICENSE-POLYFORM-SMALL-BUSINESS), for a company
   with fewer than 100 people and less than 1,000,000 USD (2019, inflation
