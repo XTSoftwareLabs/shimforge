@@ -10,6 +10,8 @@ struct Entry {
     patch: Patch,
     dispatcher: usize,
     original: Executable,
+    // Relocated x86-64 calls need shadow stacks off. ARM64 calls set x30 directly.
+    #[cfg(target_arch = "x86_64")]
     call_bridge: bool,
     global: AtomicUsize,
     next: *mut Entry,
@@ -62,6 +64,7 @@ fn fallback(dispatcher: usize) -> Option<usize> {
         if entry.dispatcher == dispatcher {
             let global = entry.global.load(Ordering::Acquire);
             return Some(if global == 0 {
+                #[cfg(target_arch = "x86_64")]
                 if entry.call_bridge {
                     crate::executable::check_call_bridge()
                         .expect("original call is not supported with shadow stacks");
@@ -133,7 +136,9 @@ pub(crate) unsafe fn install_replacement(
             return Err(Error::Overlap);
         }
         let mut saved = code::trampoline(address, original.address(), &plan.original)?;
+        #[cfg(target_arch = "x86_64")]
         let call_bridge = code::needs_call_bridge(&plan.original)?;
+        #[cfg(target_arch = "x86_64")]
         if call_bridge {
             crate::executable::check_call_bridge()?;
         }
@@ -151,6 +156,7 @@ pub(crate) unsafe fn install_replacement(
             },
             dispatcher,
             original,
+            #[cfg(target_arch = "x86_64")]
             call_bridge,
             global: AtomicUsize::new(0),
             next: HEAD.load(Ordering::Relaxed),

@@ -26,6 +26,7 @@ unsafe extern "system" {
     fn VirtualProtect(address: *const c_void, size: usize, protection: u32, old: *mut u32) -> i32;
     fn FlushInstructionCache(process: *mut c_void, address: *const c_void, size: usize) -> i32;
     fn GetCurrentProcess() -> *mut c_void;
+    #[cfg(target_arch = "x86_64")]
     fn GetProcessMitigationPolicy(
         process: *mut c_void,
         policy: u32,
@@ -34,6 +35,7 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+#[cfg(target_arch = "x86_64")]
 pub(super) fn shadow_stack() -> Result<bool, Error> {
     let mut flags = 0u32;
     // SAFETY: the current-process handle and four-byte policy buffer are valid.
@@ -42,7 +44,8 @@ pub(super) fn shadow_stack() -> Result<bool, Error> {
     });
     if result == 0 {
         let error = os_error("query shadow stack");
-        if matches!(error, Error::Os { code: 87, .. }) {
+        // A system that cannot report this policy has not enabled it.
+        if matches!(error, Error::Os { code: 87 | 50, .. }) {
             return Ok(false);
         }
         return Err(error);

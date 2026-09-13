@@ -354,11 +354,18 @@ fn partial_permission_change_failure_rolls_back_changed_pages() {
 fn failures_after_copy_roll_back_bytes_and_permissions() {
     let memory = Allocation::new();
     let address = memory.address + memory.page_size - 2;
-    for failure in [
+    // Fail the steps around the copy that must roll back to the original bytes.
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let failures = [
         ("flush instruction cache", 1),
         ("protect memory", 3),
         ("protect memory", 4),
-    ] {
+    ];
+    // Apple Silicon installs a staged copy of each region: one "protect memory" call
+    // and one flush per region. A failure at either step must roll back.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let failures = [("protect memory", 1), ("flush instruction cache", 1)];
+    for failure in failures {
         let injection = Inject::new(&[failure]);
         assert!(
             // SAFETY: This test owns both pages; no code runs in them.
@@ -414,6 +421,36 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     memory.assert_unchanged(memory.address, 32);
 }
 
+#[test]
+#[cfg(target_arch = "aarch64")]
+fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
+    const NOP: u32 = 0xd503201f;
+    const RET: u32 = 0xd65f03c0;
+    let _serial = crate::tests::serial();
+    let mut words = [NOP; 16];
+    // A BTI landing pad moves a patch planned at the entry onto the next instruction.
+    words[0] = 0xd503245f;
+    words[8] = RET;
+    words[12] = RET;
+    let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    let mut page = crate::executable::Executable::near(read as *const () as usize).unwrap();
+    page.publish(&bytes).unwrap();
+    let base = page.address();
+    let mut session = crate::Session::new_global().unwrap();
+    // SAFETY: Both NOP/RET functions use the same void ABI. This test owns their
+    // memory and keeps calls stopped while patching.
+    unsafe { session.replace_raw((base + 4) as *const (), (base + 32) as *const ()) }.unwrap();
+    let installed = read(base, 32).unwrap();
+    assert!(matches!(
+        // SAFETY: Both entries stay mapped and idle. The overlap is rejected before writing.
+        unsafe { session.replace_raw(base as *const (), (base + 48) as *const ()) },
+        Err(Error::Overlap)
+    ));
+    assert_eq!(read(base, 32).unwrap(), installed);
+    session.restore().unwrap();
+    assert_eq!(read(base, bytes.len()).unwrap(), bytes);
+}
+
 #[cfg(target_arch = "x86_64")]
 extern "C" fn native_replacement() -> u32 {
     93
@@ -446,7 +483,8 @@ fn a_generated_cet_function_can_execute_replace_and_restore() {
 
 #[test]
 fn irrecoverable_rollbacks_invoke_the_fatal_policy() {
-    for failures in [
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let cases = [
         vec![("protect memory", 2), ("protect memory", 3)],
         vec![("flush instruction cache", 1), ("protect memory", 3)],
         vec![
@@ -454,7 +492,19 @@ fn irrecoverable_rollbacks_invoke_the_fatal_policy() {
             ("flush instruction cache", 2),
         ],
         vec![("flush instruction cache", 1), ("protect memory", 5)],
-    ] {
+    ];
+    // On Apple Silicon the rollback reinstalls the saved copy of the first region.
+    // Fail that install or its flush, after a failed install or a failed flush.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let cases = [
+        vec![("protect memory", 1), ("protect memory", 2)],
+        vec![("flush instruction cache", 1), ("protect memory", 2)],
+        vec![
+            ("flush instruction cache", 1),
+            ("flush instruction cache", 2),
+        ],
+    ];
+    for failures in cases {
         let memory = Allocation::new();
         let injection = Inject::new(&failures);
         let result = std::panic::catch_unwind(|| {

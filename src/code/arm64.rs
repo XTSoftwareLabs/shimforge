@@ -119,11 +119,6 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
     })
 }
 
-pub(crate) fn needs_call_bridge(_original: &[u8]) -> Result<bool, Error> {
-    // ARM64 calls restore x30 directly; they do not use the x86 stack bridge.
-    Ok(false)
-}
-
 pub(crate) fn trampoline(
     source: usize,
     destination: usize,
@@ -246,7 +241,8 @@ pub(crate) fn trampoline(
     let next = destination
         .checked_add(output.len())
         .ok_or(Error::InvalidRange)?;
-    emit(&mut output, 0x14000000 | relative(next, continuation, 26)?);
+    // A distant page returns with the 16-byte form, which uses x16 like a call veneer.
+    output.extend_from_slice(&jump(next, continuation)?);
     Ok(output)
 }
 

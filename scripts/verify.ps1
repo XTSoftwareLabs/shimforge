@@ -21,6 +21,21 @@ try {
     Invoke-Cargo -CargoArguments @('test', '--workspace', '--locked', '--', '--test-threads=1')
     Invoke-Cargo -CargoArguments @('test', '--test', 'parallel', '--locked', '--', '--test-threads=8')
 
+    # On Windows ARM64, llvm-profdata rejects the profiles stable Rust writes
+    # ("malformed instrumentation profile data: symbol name is empty"), even for a
+    # new crate with no dependencies. Every test above still runs there; only the
+    # coverage gate is skipped until the toolchain can merge its own profiles.
+    $hostTriple = (& rustc -vV | Select-String '^host: ').Line.Substring(6)
+    if ($hostTriple -eq 'aarch64-pc-windows-msvc') {
+        $message = 'Coverage skipped on aarch64-pc-windows-msvc: the toolchain cannot merge instrumented profiles.'
+        if ($env:GITHUB_ACTIONS -eq 'true') {
+            Write-Output "::warning::$message"
+        } else {
+            Write-Warning $message
+        }
+        return
+    }
+
     New-Item -ItemType Directory -Path coverage/windows -Force | Out-Null
     Invoke-Cargo -CargoArguments @(
         'llvm-cov', '--workspace', '--all-targets', '--locked',

@@ -32,7 +32,6 @@ fn jumps_and_entry_boundaries_are_checked() {
     assert_eq!(plan.offset, 4);
     assert_eq!(plan.original, bytes(&[NOP]));
     assert_eq!(plan.replacement.len(), 4);
-    assert_eq!(needs_call_bridge(&[]), Ok(false));
 }
 
 #[test]
@@ -104,8 +103,14 @@ fn branches_and_calls_keep_their_targets() {
         trampoline(source, destination, &bytes(&[0x54000010])),
         Err(Error::InvalidInstruction)
     );
+    // A distant page returns through the 16-byte jump.
+    let far = source + (1 << 28);
+    let moved = trampoline(source, far, &bytes(&[NOP])).unwrap();
+    assert_eq!(moved.len(), 24);
+    assert_eq!(moved[8..], jump(far + 8, source + 4).unwrap());
+    // A relocated branch to code outside the prefix still needs a near page.
     assert_eq!(
-        trampoline(source, source + (1 << 28), &bytes(&[NOP])),
+        trampoline(source, far, &bytes(&[0x14000100])),
         Err(Error::InvalidRange)
     );
 }

@@ -23,10 +23,12 @@ const REACH: usize = 1 << 30;
 #[cfg(target_arch = "aarch64")]
 const REACH: usize = (1 << 27) - CAPACITY;
 
+#[cfg(target_arch = "x86_64")]
 pub(crate) fn check_call_bridge() -> Result<(), Error> {
     check_shadow_stack(platform::shadow_stack()?)
 }
 
+#[cfg(target_arch = "x86_64")]
 fn check_shadow_stack(enabled: bool) -> Result<(), Error> {
     if enabled {
         Err(Error::ShadowStack)

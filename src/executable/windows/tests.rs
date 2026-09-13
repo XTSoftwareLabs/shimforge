@@ -47,19 +47,21 @@ fn memory_layout_matches_windows_amd64() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn shadow_stack_query_errors_are_reported() {
     unsafe extern "system" {
         fn SetLastError(code: u32);
     }
-    for code in [87, 5] {
+    // ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, then ERROR_ACCESS_DENIED.
+    for code in [87, 50, 5] {
         fail_next("query shadow stack");
         // SAFETY: this changes only the test thread's error code.
         unsafe { SetLastError(code) };
         let result = shadow_stack();
-        if code == 87 {
-            assert_eq!(result, Ok(false));
-        } else {
+        if code == 5 {
             assert!(result.is_err());
+        } else {
+            assert_eq!(result, Ok(false));
         }
     }
 }

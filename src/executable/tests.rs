@@ -65,6 +65,7 @@ fn bad_source_and_publish_failures_are_reported() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn shadow_stack_policy_is_checked_without_changing_it() {
     assert_eq!(check_shadow_stack(false), Ok(()));
     assert_eq!(check_shadow_stack(true), Err(Error::ShadowStack));

@@ -17,10 +17,12 @@ fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
     #[cfg(target_arch = "x86_64")]
     let bytes = vec![0x90; 64];
     #[cfg(target_arch = "aarch64")]
-    let bytes: Vec<_> = [0xd503201fu32; 16]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
+    let bytes: Vec<_> = {
+        let mut words = [0xd503201fu32; 16];
+        // A BTI landing pad just before `source` moves a patch planned there onto `source`.
+        words[3] = 0xd503245f;
+        words.into_iter().flat_map(u32::to_le_bytes).collect()
+    };
     page.publish(&bytes).unwrap();
     let source = page.address() + 16;
     // SAFETY: test-owned code is never called while these routes are installed.
@@ -40,6 +42,8 @@ fn invalid_and_overlapping_entries_leave_the_first_route_intact() {
         assert_eq!(install(source - 1, other), Err(Error::Overlap));
         #[cfg(target_arch = "aarch64")]
         assert_eq!(install(source - 1, other), Err(Error::InvalidRange));
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(install(source - 4, other), Err(Error::Overlap));
         assert_eq!(install(page.address(), target), Err(Error::Overlap));
         remove(source);
     }

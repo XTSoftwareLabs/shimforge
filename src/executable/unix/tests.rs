@@ -42,3 +42,29 @@ fn native_allocation_failure_is_reported() {
     fail_next("allocate trampoline");
     assert!(reserve(CAPACITY).is_none());
 }
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn distant_pages_are_used_only_when_no_near_page_exists() {
+    assert_eq!(
+        fallback(Ok(CAPACITY), &mut |_| unreachable!()),
+        Ok(CAPACITY)
+    );
+    assert_eq!(
+        fallback(Err(Error::InvalidAddress), &mut |_| unreachable!()),
+        Err(Error::InvalidAddress)
+    );
+    let mut hints = Vec::new();
+    assert_eq!(
+        fallback(Err(Error::InsufficientSpace), &mut |hint| {
+            hints.push(hint);
+            Some(REACH * 64)
+        }),
+        Ok(REACH * 64)
+    );
+    assert_eq!(hints, [0]);
+    assert_eq!(
+        fallback(Err(Error::InsufficientSpace), &mut |_| None),
+        Err(Error::InsufficientSpace)
+    );
+}
