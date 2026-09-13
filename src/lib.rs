@@ -406,6 +406,10 @@ impl Drop for Session {
 /// be `Send + 'static`. Follow the same runtime safety rules as [`replace!`].
 /// Installation panics if the function cannot be patched.
 ///
+/// Borrowed inputs in a safe signature must accept any lifetime. For a function
+/// that only accepts `'static` borrows, declare an `unsafe fn` signature; it is
+/// checked only as a function pointer, so confirm the lifetimes yourself.
+///
 /// The source signature must match:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new_global();
@@ -526,9 +530,10 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// ```
 ///
 /// No `unsafe` block is needed. Follow the crate's safety rules. Lifetime checks
-/// are best effort; do not narrow lifetimes to force a type match. Closures
-/// without captures are accepted. Installation panics if the function cannot be
-/// patched.
+/// are best effort; do not narrow lifetimes to force a type match. Borrowed inputs
+/// in a safe signature must accept any lifetime; use an `unsafe fn` signature for a
+/// function that only accepts `'static` borrows. Closures without captures are
+/// accepted. Installation panics if the function cannot be patched.
 ///
 /// Incompatible signatures are rejected:
 /// ```compile_fail

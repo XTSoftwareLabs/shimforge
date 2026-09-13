@@ -763,7 +763,9 @@ fn independent_input_lifetimes_keep_their_output_link() {
 fn genuine_static_inputs_and_results_stay_supported() {
     let _serial = serial_test();
     let mut session = Session::new_global();
-    let length = mock!(session, static_length, fn(&'static str) -> usize);
+    // Safe signatures require borrowed inputs that accept any lifetime, so a function
+    // that only takes 'static borrows is declared unsafe.
+    let length = mock!(session, static_length, unsafe fn(&'static str) -> usize);
     let seen = Arc::new(Mutex::new(None));
     let captured = seen.clone();
     length.expect().once().returning(move |value| {
