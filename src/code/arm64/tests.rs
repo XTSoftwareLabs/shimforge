@@ -32,7 +32,6 @@ fn jumps_and_entry_boundaries_are_checked() {
     assert_eq!(plan.offset, 4);
     assert_eq!(plan.original, bytes(&[NOP]));
     assert_eq!(plan.replacement.len(), 4);
-    assert_eq!(needs_call_bridge(&[]), Ok(false));
 }
 
 #[test]

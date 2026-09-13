@@ -1,5 +1,6 @@
 #[cfg(target_arch = "x86_64")]
 use super::{os_error, syscall};
+#[cfg(target_arch = "x86_64")]
 use crate::Error;
 
 pub(super) use super::unix::{allocate, release, seal};
@@ -32,11 +33,6 @@ fn query_shadow_stack(query: &mut dyn FnMut(&mut usize) -> libc::c_long) -> Resu
         return Err(error);
     }
     Ok(flags & 1 != 0)
-}
-
-#[cfg(target_arch = "aarch64")]
-pub(super) fn shadow_stack() -> Result<bool, Error> {
-    Ok(false)
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]

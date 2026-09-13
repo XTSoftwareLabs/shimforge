@@ -119,11 +119,6 @@ pub(crate) fn plan(source: usize, target: usize, bytes: &[u8]) -> Result<Plan, E
     })
 }
 
-pub(crate) fn needs_call_bridge(_original: &[u8]) -> Result<bool, Error> {
-    // ARM64 calls restore x30 directly; they do not use the x86 stack bridge.
-    Ok(false)
-}
-
 pub(crate) fn trampoline(
     source: usize,
     destination: usize,
