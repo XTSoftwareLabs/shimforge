@@ -12,7 +12,9 @@ The usual answer is to change the production code first: introduce a trait,
 thread it through every caller, and keep it forever even though only one
 implementation ever ships. Take this function:
 
-```rust,ignore
+```rust
+use std::fs;
+
 fn claim_slot() -> Result<(), String> {
     if let Err(error) = fs::create_dir_all("/var/run/dispatcher") {
         // Failure path.
@@ -29,26 +31,27 @@ real directory. With shimforge you test both paths without editing it and
 without preparing an environment:
 
 ```rust
-# use std::{fs, io};
-# fn claim_slot() -> Result<(), String> {
-#     if let Err(error) = fs::create_dir_all("/var/run/dispatcher") {
-#         return Err(format!("cannot claim a slot: {error}"));
-#     }
-#     Ok(())
-# }
 use shimforge::{Session, mock};
+use std::io;
 
-let mut session = Session::new()?;
-let create = mock!(session, fs::create_dir_all::<&str>, fn(&str) -> io::Result<()>)?;
-create
-    .expect()
-    .with(|path| *path == "/var/run/dispatcher")
-    .once()
-    .returning(|_| Ok(()))?;
+#[test]
+fn claim_slot_succeeds_without_a_real_directory() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let create = mock!(
+        session,
+        fs::create_dir_all::<&str>,
+        fn(&str) -> io::Result<()>
+    )?;
+    create
+        .expect()
+        .with(|path| *path == "/var/run/dispatcher")
+        .once()
+        .returning(|_| Ok(()))?;
 
-assert!(claim_slot().is_ok());
-session.verify()?;
-# Ok::<(), shimforge::Error>(())
+    assert!(claim_slot().is_ok());
+    session.verify()?;
+    Ok(())
+}
 ```
 
 `claim_slot` is unchanged, `fs::create_dir_all` never reaches the disk, and the
@@ -90,6 +93,9 @@ Import the two macros and the session type, then run `cargo test` as usual:
 use shimforge::{Session, mock, replace};
 ```
 
+Every example below is a complete test. It returns `Result<(), shimforge::Error>`,
+so `?` turns a shimforge error into a test failure.
+
 ## Thread-local and global sessions
 
 `Session::new()` mocks functions **for the current thread only**, so tests run in
@@ -103,16 +109,21 @@ between threads. Global sessions take an exclusive lock, so they run one at a ti
 ```rust
 use shimforge::{Session, mock};
 
-fn worker_count() -> usize { 2 }
+fn worker_count() -> usize {
+    2
+}
 
-let mut session = Session::new()?;
-let count = mock!(session, worker_count, fn() -> usize)?;
-count.expect().returns(16)?;
+#[test]
+fn other_threads_keep_the_original_function() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let count = mock!(session, worker_count, fn() -> usize)?;
+    count.expect().returns(16)?;
 
-assert_eq!(worker_count(), 16);
-// A thread with no session of its own still calls the original.
-assert_eq!(std::thread::spawn(worker_count).join().unwrap(), 2);
-# Ok::<(), shimforge::Error>(())
+    assert_eq!(worker_count(), 16);
+    // A thread with no session of its own still calls the original.
+    assert_eq!(std::thread::spawn(worker_count).join().unwrap(), 2);
+    Ok(())
+}
 ```
 
 ## Constant results
@@ -125,17 +136,24 @@ use shimforge::{Session, mock};
 use std::path::Path;
 
 fn export_state(marker: &Path) -> &'static str {
-    if marker.exists() { "finished" } else { "running" }
+    if marker.exists() {
+        "finished"
+    } else {
+        "running"
+    }
 }
 
-let mut session = Session::new()?;
-let exists = mock!(session, Path::exists, fn(&Path) -> bool)?;
-exists.expect().returns(true)?;
+#[test]
+fn a_constant_result_answers_every_call() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let exists = mock!(session, Path::exists, fn(&Path) -> bool)?;
+    exists.expect().returns(true)?;
 
-assert_eq!(export_state(Path::new("virtual/export.done")), "finished");
-session.restore()?;
-assert_eq!(export_state(Path::new("virtual/export.done")), "running");
-# Ok::<(), shimforge::Error>(())
+    assert_eq!(export_state(Path::new("virtual/export.done")), "finished");
+    session.restore()?;
+    assert_eq!(export_state(Path::new("virtual/export.done")), "running");
+    Ok(())
+}
 ```
 
 ## Matching arguments and counting calls
@@ -155,17 +173,24 @@ fn load_port(path: &Path) -> io::Result<u16> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-let mut session = Session::new()?;
-let read = mock!(session, fs::read_to_string::<&Path>, fn(&Path) -> io::Result<String>)?;
-read.expect()
-    .with(|path| *path == Path::new("service.port"))
-    .times(2)
-    .returning(|_| Ok("8080\n".to_owned()))?;
+#[test]
+fn matching_calls_are_counted() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let read = mock!(
+        session,
+        fs::read_to_string::<&Path>,
+        fn(&Path) -> io::Result<String>
+    )?;
+    read.expect()
+        .with(|path| *path == Path::new("service.port"))
+        .times(2)
+        .returning(|_| Ok("8080\n".to_owned()))?;
 
-assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
-assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
-session.verify()?;
-# Ok::<(), shimforge::Error>(())
+    assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
+    assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
+    session.verify()?;
+    Ok(())
+}
 ```
 
 | Method | Meaning |
@@ -197,25 +222,40 @@ of calls across different mocks.
 ```rust
 use shimforge::{Sequence, Session, mock};
 
-fn next_id() -> u64 { 1 }
-fn save_id(id: u64) -> bool { id > 0 }
+fn next_id() -> u64 {
+    1
+}
 
-let mut session = Session::new()?;
-let next = mock!(session, next_id, fn() -> u64)?;
-let save = mock!(session, save_id, fn(u64) -> bool)?;
-let order = Sequence::new();
-let mut id = 40;
-next.expect().times(2).in_sequence(&order).returning(move || {
-    id += 1;
-    id
-})?;
-save.expect().with(|id| *id == 42).once().in_sequence(&order).returns(true)?;
+fn save_id(id: u64) -> bool {
+    id > 0
+}
 
-assert_eq!(next_id(), 41);
-assert_eq!(next_id(), 42);
-assert!(save_id(42));
-session.verify()?;
-# Ok::<(), shimforge::Error>(())
+#[test]
+fn results_follow_the_call_order() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let next = mock!(session, next_id, fn() -> u64)?;
+    let save = mock!(session, save_id, fn(u64) -> bool)?;
+    let order = Sequence::new();
+    let mut id = 40;
+    next.expect()
+        .times(2)
+        .in_sequence(&order)
+        .returning(move || {
+            id += 1;
+            id
+        })?;
+    save.expect()
+        .with(|id| *id == 42)
+        .once()
+        .in_sequence(&order)
+        .returns(true)?;
+
+    assert_eq!(next_id(), 41);
+    assert_eq!(next_id(), 42);
+    assert!(save_id(42));
+    session.verify()?;
+    Ok(())
+}
 ```
 
 ## Writing through reference parameters
@@ -236,30 +276,33 @@ fn fill(buffer: &mut [u8]) -> usize {
     buffer.len()
 }
 
-let mut session = Session::new()?;
-let split = mock!(session, split_amount, fn(u64, &mut u64, &mut u64))?;
-split
-    .expect()
-    .with(|total, _, _| *total == 1234)
-    .once()
-    .returning(|_, whole, cents| {
-        *whole = 99;
-        *cents = 5;
+#[test]
+fn a_mock_fills_output_parameters() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let split = mock!(session, split_amount, fn(u64, &mut u64, &mut u64))?;
+    split
+        .expect()
+        .with(|total, _, _| *total == 1234)
+        .once()
+        .returning(|_, whole, cents| {
+            *whole = 99;
+            *cents = 5;
+        })?;
+    let write = mock!(session, fill, fn(&mut [u8]) -> usize)?;
+    write.expect().once().returning(|buffer| {
+        buffer[..2].copy_from_slice(b"ok");
+        2
     })?;
-let write = mock!(session, fill, fn(&mut [u8]) -> usize)?;
-write.expect().once().returning(|buffer| {
-    buffer[..2].copy_from_slice(b"ok");
-    2
-})?;
 
-let (mut whole, mut cents) = (0, 0);
-split_amount(1234, &mut whole, &mut cents);
-assert_eq!((whole, cents), (99, 5));
+    let (mut whole, mut cents) = (0, 0);
+    split_amount(1234, &mut whole, &mut cents);
+    assert_eq!((whole, cents), (99, 5));
 
-let mut buffer = [0; 8];
-assert_eq!(fill(&mut buffer), 2);
-assert_eq!(&buffer[..2], b"ok");
-# Ok::<(), shimforge::Error>(())
+    let mut buffer = [0; 8];
+    assert_eq!(fill(&mut buffer), 2);
+    assert_eq!(&buffer[..2], b"ok");
+    Ok(())
+}
 ```
 
 ## Methods and generic functions
@@ -272,7 +315,9 @@ the instantiation you want with a turbofish; the others keep their original body
 use shimforge::{Session, mock};
 use std::fmt::Display;
 
-struct Cache { region: String }
+struct Cache {
+    region: String,
+}
 
 impl Cache {
     fn hit_rate(&self, key: &str) -> f32 {
@@ -281,24 +326,31 @@ impl Cache {
     }
 }
 
-fn render<T: Display>(value: T) -> String { format!("live {value}") }
+fn render<T: Display>(value: T) -> String {
+    format!("live {value}")
+}
 
-let mut session = Session::new()?;
-let rates = mock!(session, Cache::hit_rate, fn(&Cache, &str) -> f32)?;
-rates
-    .expect()
-    .with(|cache, key| cache.region == "eu" && *key == "sessions")
-    .once()
-    .returns(0.75)?;
-let rendered = mock!(session, render::<u8>, fn(u8) -> String)?;
-rendered.expect().once().returns("mocked".to_owned())?;
+#[test]
+fn a_method_and_one_generic_instance_are_mocked() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let rates = mock!(session, Cache::hit_rate, fn(&Cache, &str) -> f32)?;
+    rates
+        .expect()
+        .with(|cache, key| cache.region == "eu" && *key == "sessions")
+        .once()
+        .returns(0.75)?;
+    let rendered = mock!(session, render::<u8>, fn(u8) -> String)?;
+    rendered.expect().once().returns("mocked".to_owned())?;
 
-let cache = Cache { region: "eu".to_owned() };
-assert_eq!(cache.hit_rate("sessions"), 0.75);
-assert_eq!(render(7u8), "mocked");
-// A different type argument is a different function.
-assert_eq!(render("7"), "live 7");
-# Ok::<(), shimforge::Error>(())
+    let cache = Cache {
+        region: "eu".to_owned(),
+    };
+    assert_eq!(cache.hit_rate("sessions"), 0.75);
+    assert_eq!(render(7u8), "mocked");
+    // A different type argument is a different function.
+    assert_eq!(render("7"), "live 7");
+    Ok(())
+}
 ```
 
 ## Replacing a whole function
@@ -314,16 +366,21 @@ fn checksum(bytes: &[u8]) -> u32 {
     bytes.iter().map(|byte| u32::from(*byte)).sum()
 }
 
-fn fixed_checksum(_bytes: &[u8]) -> u32 { 7 }
+fn fixed_checksum(_bytes: &[u8]) -> u32 {
+    7
+}
 
-let mut session = Session::new()?;
-replace!(session, checksum => fixed_checksum, fn(&[u8]) -> u32)?;
-assert_eq!(checksum(b"abc"), 7);
-session.restore()?;
+#[test]
+fn a_function_or_closure_replaces_the_original() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    replace!(session, checksum => fixed_checksum, fn(&[u8]) -> u32)?;
+    assert_eq!(checksum(b"abc"), 7);
+    session.restore()?;
 
-replace!(session, checksum => |_| 9, fn(&[u8]) -> u32)?;
-assert_eq!(checksum(b"abc"), 9);
-# Ok::<(), shimforge::Error>(())
+    replace!(session, checksum => |_| 9, fn(&[u8]) -> u32)?;
+    assert_eq!(checksum(b"abc"), 9);
+    Ok(())
+}
 ```
 
 ## Async functions
@@ -335,19 +392,25 @@ polls by hand so that it needs no executor.
 
 ```rust
 use shimforge::Session;
-use std::{future::Future, pin::pin, task::{Context, Poll, Waker}};
+use std::{
+    future::Future,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
 
 async fn exchange_rate(_pair: &str) -> f64 {
     // Calls a pricing service in production.
     0.0
 }
 
-struct Ledger { name: String }
+struct Ledger {
+    name: String,
+}
 
 impl Ledger {
     async fn balance(&self) -> u64 {
-        // Reads a database in production.
-        0
+        // Reads this ledger from a database in production.
+        self.name.len() as u64
     }
 }
 
@@ -360,18 +423,28 @@ fn ready<F: Future>(future: F) -> F::Output {
     }
 }
 
-let mut session = Session::new()?;
-let rates = session.mock_async(exchange_rate(""))?;
-rates.expect().once().returns(1.25)?;
-// A throwaway receiver is enough to name the future type.
-let balances = session.mock_async(Ledger { name: String::new() }.balance())?;
-balances.expect().once().returns(4_200)?;
+#[test]
+fn async_functions_return_mocked_results() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let rates = session.mock_async(exchange_rate(""))?;
+    rates.expect().once().returns(1.25)?;
+    // A throwaway receiver is enough to name the future type.
+    let balances = session.mock_async(
+        Ledger {
+            name: String::new(),
+        }
+        .balance(),
+    )?;
+    balances.expect().once().returns(4_200)?;
 
-assert_eq!(ready(exchange_rate("EURUSD")), 1.25);
-let ledger = Ledger { name: "payroll".to_owned() };
-assert_eq!(ready(ledger.balance()), 4_200);
-session.verify()?;
-# Ok::<(), shimforge::Error>(())
+    assert_eq!(ready(exchange_rate("EURUSD")), 1.25);
+    let ledger = Ledger {
+        name: "payroll".to_owned(),
+    };
+    assert_eq!(ready(ledger.balance()), 4_200);
+    session.verify()?;
+    Ok(())
+}
 ```
 
 Async results must be `Send + 'static`, though the future itself may borrow its
@@ -386,11 +459,18 @@ avoid mocking the shared poll wrapper that every boxed future shares.
 
 ```rust
 use shimforge::{Session, mock};
-use std::{future::Future, io, pin::{Pin, pin}, task::{Context, Poll, Waker}};
+use std::{
+    future::Future,
+    io,
+    pin::{Pin, pin},
+    task::{Context, Poll, Waker},
+};
 
 type Call<'a> = Pin<Box<dyn Future<Output = io::Result<String>> + Send + 'a>>;
 
-struct Client { endpoint: String }
+struct Client {
+    endpoint: String,
+}
 
 impl Client {
     fn get<'a>(&'a self, path: &'a str) -> Call<'a> {
@@ -401,22 +481,31 @@ impl Client {
     }
 }
 
-let mut session = Session::new()?;
-let get = mock!(session, Client::get, for<'a> fn(&'a Client, &'a str) -> Call<'a>)?;
-get.expect()
-    .with(|_, path| *path == "/health")
-    .once()
-    .returning(|_, _| Box::pin(async { Ok("healthy".to_owned()) }))?;
+#[test]
+fn a_client_method_that_returns_a_boxed_future_is_mocked() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let get = mock!(
+        session,
+        Client::get,
+        for<'a> fn(&'a Client, &'a str) -> Call<'a>
+    )?;
+    get.expect()
+        .with(|_, path| *path == "/health")
+        .once()
+        .returning(|_, _| Box::pin(async { Ok("healthy".to_owned()) }))?;
 
-let client = Client { endpoint: "https://inventory.invalid".to_owned() };
-let mut response = pin!(client.get("/health"));
-let mut context = Context::from_waker(Waker::noop());
-assert!(matches!(
-    response.as_mut().poll(&mut context),
-    Poll::Ready(Ok(body)) if body == "healthy"
-));
-session.verify()?;
-# Ok::<(), shimforge::Error>(())
+    let client = Client {
+        endpoint: "https://inventory.invalid".to_owned(),
+    };
+    let mut response = pin!(client.get("/health"));
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(matches!(
+        response.as_mut().poll(&mut context),
+        Poll::Ready(Ok(body)) if body == "healthy"
+    ));
+    session.verify()?;
+    Ok(())
+}
 ```
 
 ## System and C runtime functions
@@ -434,25 +523,32 @@ unsafe extern "C" {
     fn getenv(name: *const c_char) -> *mut c_char;
 }
 
-let mut session = Session::new()?;
-let lookup = mock!(session, getenv, unsafe extern "C" fn(*const c_char) -> *mut c_char)?;
-lookup
-    .expect()
-    .with(|name| {
-        // SAFETY: callers of getenv always pass a valid C string.
-        let name = unsafe { CStr::from_ptr(*name) };
-        name == c"DEPLOY_SLOT"
-    })
-    .once()
-    .returning(|_| c"canary".as_ptr().cast_mut())?;
-// Any other variable keeps reporting that it is unset.
-lookup.expect().returning(|_| std::ptr::null_mut())?;
+#[test]
+fn getenv_reports_a_mocked_variable() -> Result<(), shimforge::Error> {
+    let mut session = Session::new()?;
+    let lookup = mock!(
+        session,
+        getenv,
+        unsafe extern "C" fn(*const c_char) -> *mut c_char
+    )?;
+    lookup
+        .expect()
+        .with(|name| {
+            // SAFETY: callers of getenv always pass a valid C string.
+            let name = unsafe { CStr::from_ptr(*name) };
+            name == c"DEPLOY_SLOT"
+        })
+        .once()
+        .returning(|_| c"canary".as_ptr().cast_mut())?;
+    // Any other variable keeps reporting that it is unset.
+    lookup.expect().returning(|_| std::ptr::null_mut())?;
 
-let key = CString::new("DEPLOY_SLOT").unwrap();
-// SAFETY: the key is a valid C string and the result is only read.
-let slot = unsafe { CStr::from_ptr(getenv(key.as_ptr())) };
-assert_eq!(slot.to_str().unwrap(), "canary");
-# Ok::<(), shimforge::Error>(())
+    let key = CString::new("DEPLOY_SLOT").unwrap();
+    // SAFETY: the key is a valid C string and the result is only read.
+    let slot = unsafe { CStr::from_ptr(getenv(key.as_ptr())) };
+    assert_eq!(slot.to_str().unwrap(), "canary");
+    Ok(())
+}
 ```
 
 A panic aborts the process when the declared ABI does not allow unwinding, so
@@ -467,18 +563,26 @@ and it requires a global session and an `unsafe` block.
 ```rust
 use shimforge::Session;
 
-fn slot_count() -> usize { 4 }
-fn fake_slot_count() -> usize { 64 }
+fn slot_count() -> usize {
+    4
+}
 
-let mut session = Session::new_global()?;
-// SAFETY: both functions are live, share a signature, and stay loaded until the
-// session restores them. No thread calls them while the patch is installed.
-unsafe { session.replace_raw(slot_count as *const (), fake_slot_count as *const ())? };
+fn fake_slot_count() -> usize {
+    64
+}
 
-assert_eq!(slot_count(), 64);
-session.restore()?;
-assert_eq!(slot_count(), 4);
-# Ok::<(), shimforge::Error>(())
+#[test]
+fn a_raw_replacement_swaps_one_function_for_another() -> Result<(), shimforge::Error> {
+    let mut session = Session::new_global()?;
+    // SAFETY: both functions are live, share a signature, and stay loaded until the
+    // session restores them. No thread calls them while the patch is installed.
+    unsafe { session.replace_raw(slot_count as *const (), fake_slot_count as *const ())? };
+
+    assert_eq!(slot_count(), 64);
+    session.restore()?;
+    assert_eq!(slot_count(), 4);
+    Ok(())
+}
 ```
 
 ## Session lifetime
@@ -508,8 +612,9 @@ workers that use global mocks before verification and cleanup. In local mode eac
 compiled macro site stays bound to one target function, so do not reuse a site for
 different function pointers.
 
-Every Rust example above runs as a doctest, apart from the untestable snippet
-at the top. More cases are in
+Every Rust example in this README is also an integration test in
+[`tests/readme.rs`](tests/readme.rs), which fails if the two stop matching.
+More cases are in
 [`tests/expectations.rs`](tests/expectations.rs),
 [`tests/async_expectations.rs`](tests/async_expectations.rs),
 [`tests/filesystem.rs`](tests/filesystem.rs), [`tests/generics.rs`](tests/generics.rs),
