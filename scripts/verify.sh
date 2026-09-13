@@ -16,7 +16,7 @@ case "$(uname -s)" in
 esac
 mkdir -p "coverage/$platform"
 cargo llvm-cov --workspace --all-targets --locked \
-    --ignore-filename-regex '(^|[/\\])tests([/\\]|\.rs$)' \
+    --ignore-filename-regex '(^|[/\\])(tests|examples)([/\\]|\.rs$)' \
     --fail-under-lines 100 --fail-under-functions 100 \
     --lcov --output-path "coverage/$platform/lcov.info" \
     -- --test-threads=1
