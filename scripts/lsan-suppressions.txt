@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for the AddressSanitizer job in .github/workflows/ci.yml.
+#
+# This unit test injects a failed patch write. routing::install_replacement then keeps
+# the half-built route entry allocated on purpose, because another thread may still be
+# reading it, so the entry and its two byte buffers are reported at exit.
+leak:local_installation_errors_can_be_retried_and_cleanup_does_not_write_code

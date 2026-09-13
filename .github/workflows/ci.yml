@@ -103,3 +103,79 @@ jobs:
         with:
           toolchain: '1.85.0'
       - run: cargo check --workspace --all-targets --locked
+
+  # Runtime checks for undefined behaviour, set up like crossbeam's CI. They need a
+  # pinned nightly. -Znext-solver=coherence keeps the previous trait solver, which
+  # older mock! expansions need; drop it once the signature check no longer does.
+  careful:
+    name: cargo careful (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+    env:
+      RUSTFLAGS: -Z randomize-layout -Znext-solver=coherence
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: rust@nightly-2026-09-12+rust-src,cargo-careful
+          fallback: none
+      # shimforge-macros is left out: its test binary cannot load the shared std that
+      # cargo careful builds, and its code only runs inside the compiler.
+      - name: Test suite
+        shell: bash
+        run: cargo careful test -p shimforge --locked --no-fail-fast -- --test-threads=1
+      - name: Parallel tests
+        if: success() || failure()
+        shell: bash
+        run: cargo careful test -p shimforge --locked --test parallel -- --test-threads=8
+
+  sanitizer:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: AddressSanitizer
+            target: x86_64-unknown-linux-gnuasan
+            build-std: ''
+          - name: ThreadSanitizer
+            target: x86_64-unknown-linux-gnutsan
+            build-std: -Z build-std
+    env:
+      RUSTFLAGS: -Znext-solver=coherence
+      ASAN_OPTIONS: detect_stack_use_after_return=1
+      LSAN_OPTIONS: suppressions=${{ github.workspace }}/scripts/lsan-suppressions.txt
+      TSAN_OPTIONS: enable_adaptive_delay=1
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: rust@nightly-2026-09-12+rust-src+${{ matrix.target }}
+          fallback: none
+      # Leak suppressions match function names, so reports must be symbolized.
+      - name: Find a symbolizer
+        run: |
+          path=$(command -v llvm-symbolizer || true)
+          if [ -z "$path" ]; then
+            path=$(ls /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -n 1 || true)
+          fi
+          if [ -z "$path" ]; then
+            sudo apt-get update && sudo apt-get install -y llvm
+            path=$(command -v llvm-symbolizer)
+          fi
+          echo "ASAN_SYMBOLIZER_PATH=$path" >> "$GITHUB_ENV"
+      - name: Test suite
+        run: cargo test ${{ matrix.build-std }} -p shimforge --locked --no-fail-fast --target ${{ matrix.target }} --tests -- --test-threads=1
+      - name: Parallel tests
+        if: success() || failure()
+        run: cargo test ${{ matrix.build-std }} -p shimforge --locked --target ${{ matrix.target }} --test parallel -- --test-threads=8
