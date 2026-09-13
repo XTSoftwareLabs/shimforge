@@ -42,7 +42,8 @@ buy one if you need terms the PolyForm licenses do not give you, such as:
 
 ## How to buy
 
-Write to **info@xtsoftwarelabs.com** with:
+Commercial licenses are sold by XT SOFTWARE LABS LLC, which holds the copyright
+in shimforge. Write to **info@xtsoftwarelabs.com** with:
 
 - your company name and website
 - roughly how many developers will use shimforge
