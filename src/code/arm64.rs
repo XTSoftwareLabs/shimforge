@@ -241,7 +241,8 @@ pub(crate) fn trampoline(
     let next = destination
         .checked_add(output.len())
         .ok_or(Error::InvalidRange)?;
-    emit(&mut output, 0x14000000 | relative(next, continuation, 26)?);
+    // A distant page returns with the 16-byte form, which uses x16 like a call veneer.
+    output.extend_from_slice(&jump(next, continuation)?);
     Ok(output)
 }
 

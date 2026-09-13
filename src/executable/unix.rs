@@ -1,8 +1,27 @@
 use super::{CAPACITY, REACH, os_error, syscall};
 use crate::Error;
 
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 pub(super) fn allocate(source: usize) -> Result<usize, Error> {
     search(source, &mut reserve, &mut release)
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(super) fn allocate(source: usize) -> Result<usize, Error> {
+    fallback(search(source, &mut reserve, &mut release), &mut reserve)
+}
+
+/// Apple Silicon never maps pages near the dyld shared cache, so imported functions
+/// need a distant page. ARM64 entries and trampolines reach it with a 16-byte jump.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn fallback(
+    near: Result<usize, Error>,
+    reserve: &mut dyn FnMut(usize) -> Option<usize>,
+) -> Result<usize, Error> {
+    match near {
+        Err(Error::InsufficientSpace) => reserve(0).ok_or(Error::InsufficientSpace),
+        result => result,
+    }
 }
 
 fn search(
