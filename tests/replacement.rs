@@ -357,6 +357,30 @@ fn replacement_preserves_the_borrowed_argument_lifetime() {
     assert_eq!(borrowed(owned.as_str()), "b");
 }
 
+fn static_label(value: &'static str) -> usize {
+    value.len()
+}
+
+static REMEMBERED_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
+
+fn remember_label(value: &'static str) -> usize {
+    *REMEMBERED_LABEL.lock().unwrap() = Some(value);
+    7
+}
+
+#[test]
+fn static_only_inputs_are_replaced_through_an_unsafe_signature() {
+    let _serial = serial_test();
+    let mut session = Session::new_global();
+    // A safe signature is rejected for a function that only accepts 'static borrows,
+    // so it is declared unsafe, and the replacement may keep its argument.
+    replace!(session, static_label => remember_label, unsafe fn(&'static str) -> usize);
+    assert_eq!(static_label("kept"), 7);
+    assert_eq!(*REMEMBERED_LABEL.lock().unwrap(), Some("kept"));
+    session.restore();
+    assert_eq!(static_label("kept"), 4);
+}
+
 struct Counter {
     value: i64,
 }
