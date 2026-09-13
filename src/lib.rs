@@ -1,4 +1,6 @@
-#![doc = include_str!("../README.md")]
+// The README examples are `#[test]` functions run by tests/readme.rs, not doctests.
+#![cfg_attr(not(doctest), doc = include_str!("../README.md"))]
+#![allow(clippy::test_attr_in_doctest)]
 #![deny(missing_docs)]
 
 #[cfg(not(all(
