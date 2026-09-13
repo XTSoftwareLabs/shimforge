@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  # Dry-run packaging when the manifests or this workflow change, so a package that
+  # cannot publish shows up in review instead of at release time.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'macros/Cargo.toml'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  package:
+    name: Package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - name: Check the release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$TAG does not point to a commit on main"
+            exit 1
+          fi
+          for version in $(cargo metadata --no-deps --locked --format-version 1 | jq -r '.packages[].version'); do
+            if [ "v$version" != "$TAG" ]; then
+              echo "::error::$TAG does not match crate version $version"
+              exit 1
+            fi
+          done
+      - run: cargo publish --workspace --locked --dry-run
+
+  publish:
+    name: Publish to crates.io
+    if: github.event_name == 'release'
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
