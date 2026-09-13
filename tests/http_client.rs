@@ -61,13 +61,9 @@ fn witness() -> impl Future<Output = io::Result<TcpStream>> {
 
 #[tokio::test]
 async fn a_request_is_answered_without_opening_an_outside_connection() {
-    let mut session = Session::new_global().unwrap();
-    let connects = session.mock_async(witness()).unwrap();
-    connects
-        .expect()
-        .once()
-        .return_once(local_http_peer())
-        .unwrap();
+    let mut session = Session::new_global();
+    let connects = session.mock_async(witness());
+    connects.expect().once().return_once(local_http_peer());
 
     let client = Client::builder(TokioExecutor::new()).build(HttpConnector::new());
     // 198.51.100.0/24 is reserved for documentation and is never routed.
@@ -83,17 +79,16 @@ async fn a_request_is_answered_without_opening_an_outside_connection() {
     assert_eq!(response.headers()["content-type"], "application/json");
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(String::from_utf8(body.to_vec()).unwrap(), BODY);
-    connects.verify().unwrap();
+    connects.verify();
 }
 
 #[tokio::test]
 async fn a_connect_failure_surfaces_as_a_client_error() {
-    let mut session = Session::new_global().unwrap();
-    let connects = session.mock_async(witness()).unwrap();
+    let mut session = Session::new_global();
+    let connects = session.mock_async(witness());
     connects
         .expect()
-        .returning(|| Err(io::ErrorKind::HostUnreachable.into()))
-        .unwrap();
+        .returning(|| Err(io::ErrorKind::HostUnreachable.into()));
 
     let client: Client<_, String> =
         Client::builder(TokioExecutor::new()).build(HttpConnector::new());
@@ -105,7 +100,7 @@ async fn a_connect_failure_surfaces_as_a_client_error() {
 
     let error = client.request(request).await.unwrap_err();
     assert!(error.is_connect(), "{error}");
-    session.restore().unwrap();
+    session.restore();
 }
 
 /// An SDK-style client that hands out a boxed future for each request.
@@ -138,13 +133,12 @@ impl Pipeline {
 
 #[tokio::test]
 async fn an_sdk_request_method_answers_without_a_transport() {
-    let mut session = Session::new_global().unwrap();
+    let mut session = Session::new_global();
     let sends = mock!(
         session,
         Pipeline::send,
         for<'a> fn(&'a Pipeline, &'a str) -> Call<'a>
-    )
-    .unwrap();
+    );
     sends
         .expect()
         .with(|pipeline, path| {
@@ -157,8 +151,7 @@ async fn an_sdk_request_method_answers_without_a_transport() {
                 *response.status_mut() = StatusCode::OK;
                 Ok(response)
             }) as Call<'_>
-        })
-        .unwrap();
+        });
 
     let pipeline = Pipeline {
         endpoint: String::from("https://inventory.invalid"),
@@ -166,5 +159,5 @@ async fn an_sdk_request_method_answers_without_a_transport() {
     let response = pipeline.send("/v1/items").await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.body(), BODY);
-    sends.verify().unwrap();
+    sends.verify();
 }

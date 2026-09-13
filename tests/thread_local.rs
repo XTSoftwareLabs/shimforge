@@ -13,6 +13,19 @@ fn serial_test() -> MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+/// Runs `action`, fails the test unless it panics, and returns the panic message.
+fn panic_message<T>(action: impl FnOnce() -> T) -> String {
+    let panic = catch_unwind(AssertUnwindSafe(action))
+        .err()
+        .expect("expected a panic");
+    match panic.downcast::<String>() {
+        Ok(message) => *message,
+        Err(panic) => panic
+            .downcast_ref::<&str>()
+            .map_or_else(String::new, |message| (*message).to_owned()),
+    }
+}
+
 fn increment(value: i64) -> i64 {
     value + 1
 }
@@ -30,22 +43,22 @@ extern "C" fn native(value: i64) -> i64 {
 }
 
 fn install_shared(session: &mut Session, result: i64) {
-    let mock = mock!(session, increment, fn(i64) -> i64).unwrap();
-    mock.expect().once().returns(result).unwrap();
+    let mock = mock!(session, increment, fn(i64) -> i64);
+    mock.expect().once().returns(result);
 }
 
 fn two_threads(
     install: impl FnOnce(&mut Session),
     worker_install: impl FnOnce(&mut Session) + Send + 'static,
 ) {
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     install(&mut session);
     let (ready_tx, ready_rx) = mpsc::channel();
     let (run_tx, run_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     let (drop_tx, drop_rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut session = Session::new_local().unwrap();
+        let mut session = Session::new_local();
         worker_install(&mut session);
         ready_tx.send(()).unwrap();
         run_rx.recv().unwrap();
@@ -59,18 +72,18 @@ fn two_threads(
     done_rx.recv().unwrap();
     drop_tx.send(()).unwrap();
     worker.join().unwrap();
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(increment(10), 11);
 }
 
 #[test]
 fn unmocked_threads_call_the_original() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     install_shared(&mut session, 90);
     assert_eq!(increment(3), 90);
     assert_eq!(std::thread::spawn(|| increment(3)).join().unwrap(), 4);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(increment(3), 4);
 }
 
@@ -79,12 +92,12 @@ fn different_macro_sites_can_mock_the_same_function() {
     let _serial = serial_test();
     two_threads(
         |session| {
-            let mock = mock!(session, increment, fn(i64) -> i64).unwrap();
-            mock.expect().once().returns(100).unwrap();
+            let mock = mock!(session, increment, fn(i64) -> i64);
+            mock.expect().once().returns(100);
         },
         |session| {
-            let mock = mock!(session, increment, fn(i64) -> i64).unwrap();
-            mock.expect().once().returns(200).unwrap();
+            let mock = mock!(session, increment, fn(i64) -> i64);
+            mock.expect().once().returns(200);
         },
     );
 }
@@ -101,13 +114,13 @@ fn one_macro_site_can_serve_parallel_sessions() {
 #[test]
 fn dropping_the_first_session_keeps_the_second_mock_alive() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     install_shared(&mut session, 100);
     assert_eq!(increment(4), 100);
     let (ready_tx, ready_rx) = mpsc::channel();
     let (run_tx, run_rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut session = Session::new_local().unwrap();
+        let mut session = Session::new_local();
         install_shared(&mut session, 200);
         ready_tx.send(()).unwrap();
         run_rx.recv().unwrap();
@@ -125,14 +138,14 @@ fn dropping_the_first_session_keeps_the_second_mock_alive() {
 fn panic_restores_the_original_and_releases_the_local_session() {
     let _serial = serial_test();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut session = Session::new_local().unwrap();
-        let mock = mock!(session, increment, fn(i64) -> i64).unwrap();
-        mock.expect().once().panics("local failure").unwrap();
+        let mut session = Session::new_local();
+        let mock = mock!(session, increment, fn(i64) -> i64);
+        mock.expect().once().panics("local failure");
         increment(1);
     }));
     assert!(result.is_err());
     assert_eq!(increment(1), 2);
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     install_shared(&mut session, 40);
     assert_eq!(increment(1), 40);
 }
@@ -140,18 +153,24 @@ fn panic_restores_the_original_and_releases_the_local_session() {
 #[test]
 fn duplicate_installation_can_be_retried_after_restore() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let first = mock!(session, increment, fn(i64) -> i64).unwrap();
-    first.expect().once().returns(80).unwrap();
+    let mut session = Session::new_local();
+    let first = mock!(session, increment, fn(i64) -> i64);
+    first.expect().once().returns(80);
     for should_succeed in [false, true] {
-        let result = mock!(session, increment, fn(i64) -> i64);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            mock!(session, increment, fn(i64) -> i64)
+        }));
         if should_succeed {
-            result.unwrap().expect().once().returns(90).unwrap();
+            result.unwrap().expect().once().returns(90);
             assert_eq!(increment(1), 90);
         } else {
-            assert!(matches!(result, Err(Error::Overlap)));
+            let panic = result.err().expect("a duplicate mock must panic");
+            assert_eq!(
+                panic.downcast_ref::<String>(),
+                Some(&Error::Overlap.to_string())
+            );
             assert_eq!(increment(1), 80);
-            session.restore().unwrap();
+            session.restore();
         }
     }
 }
@@ -159,17 +178,17 @@ fn duplicate_installation_can_be_retried_after_restore() {
 #[test]
 fn global_and_local_sessions_exclude_each_other() {
     let _serial = serial_test();
-    let local = Session::new_local().unwrap();
+    let local = Session::new_local();
     assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
     std::thread::spawn(|| {
         assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
-        assert!(Session::new_local().is_ok());
+        drop(Session::new_local());
     })
     .join()
     .unwrap();
     drop(local);
-    let global = Session::new_global().unwrap();
+    let global = Session::new_global();
     assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     std::thread::spawn(|| {
         assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
@@ -177,17 +196,17 @@ fn global_and_local_sessions_exclude_each_other() {
     .join()
     .unwrap();
     drop(global);
-    assert!(Session::new_local().is_ok());
+    drop(Session::new_local());
 }
 
 #[test]
 fn replacements_use_local_mode_by_default() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
-    shimforge::replace!(session, increment => |x| x + 10, fn(i64) -> i64).unwrap();
+    let mut session = Session::new();
+    shimforge::replace!(session, increment => |x| x + 10, fn(i64) -> i64);
     assert_eq!(increment(1), 11);
     assert_eq!(std::thread::spawn(|| increment(1)).join().unwrap(), 2);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(increment(1), 2);
 }
 
@@ -199,33 +218,32 @@ fn a_function_can_switch_between_local_and_global_modes() {
             Session::new_global()
         } else {
             Session::new()
-        }
-        .unwrap();
+        };
         install_shared(&mut session, 70);
         assert_eq!(increment(1), 70);
-        session.restore().unwrap();
+        session.restore();
         assert_eq!(increment(1), 2);
     }
-    let mut session = Session::new_global().unwrap();
-    shimforge::replace!(session, increment => |value| value + 10, fn(i64) -> i64).unwrap();
+    let mut session = Session::new_global();
+    shimforge::replace!(session, increment => |value| value + 10, fn(i64) -> i64);
     assert_eq!(increment(1), 11);
     assert_eq!(std::thread::spawn(|| increment(1)).join().unwrap(), 11);
-    assert!(shimforge::replace!(session, increment => |value| value + 20, fn(i64) -> i64).is_err());
-    session.restore().unwrap();
+    panic_message(|| shimforge::replace!(session, increment => |value| value + 20, fn(i64) -> i64));
+    session.restore();
     assert_eq!(increment(1), 2);
 }
 
 #[test]
 fn local_replacements_keep_borrows_and_native_arguments() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
-    shimforge::replace!(session, borrowed => |value| &value[1..], fn(&str) -> &str).unwrap();
+    let mut session = Session::new();
+    shimforge::replace!(session, borrowed => |value| &value[1..], fn(&str) -> &str);
     assert_eq!(borrowed("word"), "ord");
     assert_eq!(
         std::thread::spawn(|| borrowed("word")).join().unwrap(),
         "word"
     );
-    shimforge::replace!(session, native => native_replacement, extern "C" fn(i64) -> i64).unwrap();
+    shimforge::replace!(session, native => native_replacement, extern "C" fn(i64) -> i64);
     assert_eq!(native(1), 31);
     assert_eq!(std::thread::spawn(|| native(1)).join().unwrap(), 3);
 }
@@ -244,9 +262,9 @@ fn failing_callee() -> usize {
 #[test]
 fn original_calls_can_unwind_through_the_saved_entry() {
     let _serial = serial_test();
-    let mut session = Session::new().unwrap();
-    let mock = mock!(session, first_call, fn() -> usize).unwrap();
-    mock.expect().once().returns(20).unwrap();
+    let mut session = Session::new();
+    let mock = mock!(session, first_call, fn() -> usize);
+    mock.expect().once().returns(20);
     assert_eq!(first_call(), 20);
     std::thread::spawn(|| {
         let error = catch_unwind(first_call).unwrap_err();
@@ -254,7 +272,7 @@ fn original_calls_can_unwind_through_the_saved_entry() {
     })
     .join()
     .unwrap();
-    session.restore().unwrap();
+    session.restore();
     assert!(catch_unwind(first_call).is_err());
 }
 
@@ -266,15 +284,14 @@ fn filesystem_replacements_need_no_wrappers() {
         io,
         path::Path,
     };
-    let mut session = Session::new().unwrap();
-    shimforge::replace!(session, fs::read::<&Path> => |_| Ok(b"file contents".to_vec()), fn(&Path) -> io::Result<Vec<u8>>).unwrap();
+    let mut session = Session::new();
+    shimforge::replace!(session, fs::read::<&Path> => |_| Ok(b"file contents".to_vec()), fn(&Path) -> io::Result<Vec<u8>>);
     shimforge::replace!(session, fs::write::<&Path, &[u8]> => |path, data| {
         assert_eq!(path, Path::new("virtual/output"));
         assert_eq!(data, b"data");
         Ok(())
-    }, fn(&Path, &[u8]) -> io::Result<()>)
-    .unwrap();
-    shimforge::replace!(session, File::open::<&str> => |_| Err(io::ErrorKind::PermissionDenied.into()), fn(&str) -> io::Result<File>).unwrap();
+    }, fn(&Path, &[u8]) -> io::Result<()>);
+    shimforge::replace!(session, File::open::<&str> => |_| Err(io::ErrorKind::PermissionDenied.into()), fn(&str) -> io::Result<File>);
     assert_eq!(
         fs::read(Path::new("virtual/input")).unwrap(),
         b"file contents"
@@ -291,23 +308,21 @@ fn file_mocks_do_not_intercept_memory_inspection() {
     let _serial = serial_test();
     use std::{fs, io, path::Path};
     for constructor in [Session::new, Session::new_global] {
-        let mut session = constructor().unwrap();
+        let mut session = constructor();
         let read = mock!(
             session,
             fs::read_to_string::<&str>,
             fn(&str) -> io::Result<String>
-        )
-        .unwrap();
+        );
         read.expect()
             .once()
-            .returning(|_| Ok("mock contents".to_owned()))
-            .unwrap();
-        let exists = mock!(session, Path::exists, fn(&Path) -> bool).unwrap();
-        exists.expect().once().returns(false).unwrap();
+            .returning(|_| Ok("mock contents".to_owned()));
+        let exists = mock!(session, Path::exists, fn(&Path) -> bool);
+        exists.expect().once().returns(false);
         assert_eq!(fs::read_to_string("virtual/file").unwrap(), "mock contents");
         let executable = std::env::current_exe().unwrap();
         assert!(!executable.exists());
-        session.restore().unwrap();
+        session.restore();
         assert!(executable.exists());
     }
 }
@@ -320,19 +335,15 @@ fn native_async_mocks_can_switch_modes() {
             Session::new_global()
         } else {
             Session::new()
-        }
-        .unwrap();
-        let mock = session.mock_async(fetch(1)).unwrap();
-        mock.expect()
-            .times(if global { 2 } else { 1 })
-            .returns(80)
-            .unwrap();
+        };
+        let mock = session.mock_async(fetch(1));
+        mock.expect().times(if global { 2 } else { 1 }).returns(80);
         assert_eq!(ready(fetch(1)), 80);
         assert_eq!(
             std::thread::spawn(|| ready(fetch(1))).join().unwrap(),
             if global { 80 } else { 2 }
         );
-        session.restore().unwrap();
+        session.restore();
         assert_eq!(ready(fetch(1)), 2);
     }
 }
@@ -342,12 +353,12 @@ fn local_sessions_recover_after_a_global_panic() {
     let _serial = serial_test();
     assert!(
         catch_unwind(|| {
-            let _session = Session::new_global().unwrap();
+            let _session = Session::new_global();
             panic!("global failure");
         })
         .is_err()
     );
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     install_shared(&mut session, 40);
     assert_eq!(increment(1), 40);
 }
@@ -359,9 +370,9 @@ fn aggregate(seed: u64, gain: f64) -> [u64; 12] {
 #[test]
 fn original_fallback_preserves_large_returns_and_float_arguments() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = mock!(session, aggregate, fn(u64, f64) -> [u64; 12]).unwrap();
-    mock.expect().once().returns([40; 12]).unwrap();
+    let mut session = Session::new_local();
+    let mock = mock!(session, aggregate, fn(u64, f64) -> [u64; 12]);
+    mock.expect().once().returns([40; 12]);
     assert_eq!(aggregate(3, 4.0), [40; 12]);
     assert_eq!(
         std::thread::spawn(|| aggregate(3, 4.0)).join().unwrap(),
@@ -377,9 +388,9 @@ fn may_panic(value: i64) -> i64 {
 #[test]
 fn original_fallback_can_unwind() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = mock!(session, may_panic, fn(i64) -> i64).unwrap();
-    mock.expect().once().returns(10).unwrap();
+    let mut session = Session::new_local();
+    let mock = mock!(session, may_panic, fn(i64) -> i64);
+    mock.expect().once().returns(10);
     std::thread::spawn(|| assert!(catch_unwind(|| may_panic(0)).is_err()))
         .join()
         .unwrap();
@@ -389,14 +400,13 @@ fn original_fallback_can_unwind() {
 #[test]
 fn borrowed_and_owned_results_keep_their_original_fallback() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = mock!(session, borrowed, fn(&str) -> &str).unwrap();
-    mock.expect().once().returning(|value| value).unwrap();
-    let mock = mock!(session, owned, fn(String) -> String).unwrap();
+    let mut session = Session::new_local();
+    let mock = mock!(session, borrowed, fn(&str) -> &str);
+    mock.expect().once().returning(|value| value);
+    let mock = mock!(session, owned, fn(String) -> String);
     mock.expect()
         .once()
-        .returning(|value| format!("mock {value}"))
-        .unwrap();
+        .returning(|value| format!("mock {value}"));
     assert_eq!(borrowed(" value "), " value ");
     assert_eq!(owned("value".to_owned()), "mock value");
     std::thread::spawn(|| {
@@ -411,9 +421,9 @@ fn borrowed_and_owned_results_keep_their_original_fallback() {
 #[test]
 fn native_abi_mocks_are_thread_local() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = mock!(session, native, extern "C" fn(i64) -> i64).unwrap();
-    mock.expect().once().returns(70).unwrap();
+    let mut session = Session::new_local();
+    let mock = mock!(session, native, extern "C" fn(i64) -> i64);
+    mock.expect().once().returns(70);
     assert_eq!(native(5), 70);
     assert_eq!(std::thread::spawn(|| native(5)).join().unwrap(), 7);
 }
@@ -433,27 +443,27 @@ async fn fetch(value: i64) -> i64 {
 #[test]
 fn async_mocks_leave_other_threads_unchanged() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = session.mock_async(fetch(0)).unwrap();
-    mock.expect().once().returns(60).unwrap();
+    let mut session = Session::new_local();
+    let mock = session.mock_async(fetch(0));
+    mock.expect().once().returns(60);
     assert_eq!(ready(fetch(5)), 60);
     assert_eq!(std::thread::spawn(|| ready(fetch(5))).join().unwrap(), 6);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(ready(fetch(5)), 6);
 }
 
 #[test]
 fn async_sessions_can_share_a_poll_function_and_drop_in_either_order() {
     let _serial = serial_test();
-    let mut session = Session::new_local().unwrap();
-    let mock = session.mock_async(fetch(0)).unwrap();
-    mock.expect().once().returns(100).unwrap();
+    let mut session = Session::new_local();
+    let mock = session.mock_async(fetch(0));
+    mock.expect().once().returns(100);
     let (ready_tx, ready_rx) = mpsc::channel();
     let (run_tx, run_rx) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut session = Session::new_local().unwrap();
-        let mock = session.mock_async(fetch(0)).unwrap();
-        mock.expect().once().returns(200).unwrap();
+        let mut session = Session::new_local();
+        let mock = session.mock_async(fetch(0));
+        mock.expect().once().returns(200);
         ready_tx.send(()).unwrap();
         run_rx.recv().unwrap();
         assert_eq!(ready(fetch(4)), 200);
@@ -486,17 +496,15 @@ fn file_reads_are_mocked_only_on_the_current_thread() {
         .unwrap();
     file.write_all(b"disk content").unwrap();
     drop(file);
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     let mock = mock!(
         session,
         std::fs::read_to_string::<&std::path::Path>,
         fn(&std::path::Path) -> std::io::Result<String>
-    )
-    .unwrap();
+    );
     mock.expect()
         .once()
-        .return_once(Ok("mock content".to_owned()))
-        .unwrap();
+        .return_once(Ok("mock content".to_owned()));
     assert_eq!(
         std::fs::read_to_string(path.as_path()).unwrap(),
         "mock content"
@@ -508,6 +516,6 @@ fn file_reads_are_mocked_only_on_the_current_thread() {
             .unwrap(),
         "disk content"
     );
-    session.restore().unwrap();
+    session.restore();
     std::fs::remove_file(path).unwrap();
 }

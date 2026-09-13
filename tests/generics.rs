@@ -45,16 +45,15 @@ fn one_instantiation_is_mocked_and_restored_with_the_session() {
     let target = Path::new("virtual/ledger.tar");
     assert!(archive(target).is_err());
     {
-        let mut session = Session::new().unwrap();
-        let archives = mock!(session, archive::<&Path>, fn(&Path) -> io::Result<()>).unwrap();
+        let mut session = Session::new();
+        let archives = mock!(session, archive::<&Path>, fn(&Path) -> io::Result<()>);
         archives
             .expect()
             .with(|path| **path == *Path::new("virtual/ledger.tar"))
             .once()
-            .returning(|_| Ok(()))
-            .unwrap();
+            .returning(|_| Ok(()));
         assert!(archive(target).is_ok());
-        session.verify().unwrap();
+        session.verify();
     }
     assert_eq!(
         archive(target).unwrap_err().kind(),
@@ -64,19 +63,17 @@ fn one_instantiation_is_mocked_and_restored_with_the_session() {
 
 #[test]
 fn other_instantiations_keep_the_original_body() {
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let summaries = mock!(
         session,
         summarize::<&str, bool, i32>,
         fn(&str, bool, i32) -> String
-    )
-    .unwrap();
+    );
     let expected = summaries
         .expect()
         .with(|head, flag, count| **head == *"orders" && *flag && *count == 19)
         .once()
-        .returns(String::from("mocked summary"))
-        .unwrap();
+        .returns(String::from("mocked summary"));
 
     assert_eq!(summarize("orders", true, 19), "mocked summary");
     // A different set of type arguments compiles to a different function.
@@ -86,34 +83,32 @@ fn other_instantiations_keep_the_original_body() {
 
 #[test]
 fn a_type_parameter_inside_a_slice_can_be_named_with_a_turbofish() {
-    let mut session = Session::new().unwrap();
-    let joins = mock!(session, joined::<&str>, fn(&str, &[&str]) -> String).unwrap();
+    let mut session = Session::new();
+    let joins = mock!(session, joined::<&str>, fn(&str, &[&str]) -> String);
     joins
         .expect()
         .with(|separator, parts| **separator == *" / " && parts.len() == 2)
         .once()
-        .returning(|separator, parts| parts.join(separator))
-        .unwrap();
+        .returning(|separator, parts| parts.join(separator));
 
     assert_eq!(joined(" / ", &["north", "south"]), "north / south");
-    session.verify().unwrap();
+    session.verify();
 }
 
 #[test]
 fn a_caller_that_names_its_own_lifetime_reaches_the_same_instantiation() {
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let checks = mock!(
         session,
         is_stale::<u16, bool, &str>,
         fn(u16, bool, &str) -> bool
-    )
-    .unwrap();
-    checks.expect().times(2).returns(true).unwrap();
+    );
+    checks.expect().times(2).returns(true);
 
     assert!(is_stale(7u16, false, "12"));
     let count = String::from("12");
     assert!(stale_with_borrowed_count(&count));
-    session.verify().unwrap();
+    session.verify();
 }
 
 #[test]
@@ -121,16 +116,15 @@ fn generic_methods_are_mocked_per_type_argument() {
     let queue = Queue {
         name: String::from("reports"),
     };
-    let mut session = Session::new().unwrap();
-    let publishes = mock!(session, Queue::publish::<u32>, fn(&Queue, u32) -> String).unwrap();
+    let mut session = Session::new();
+    let publishes = mock!(session, Queue::publish::<u32>, fn(&Queue, u32) -> String);
     publishes
         .expect()
         .with(|queue, payload| queue.name == "reports" && *payload == 5)
         .once()
-        .returning(|queue, payload| format!("{} dropped {payload}", queue.name))
-        .unwrap();
+        .returning(|queue, payload| format!("{} dropped {payload}", queue.name));
 
     assert_eq!(queue.publish(5u32), "reports dropped 5");
     assert_eq!(queue.publish("5"), "reports <- 5");
-    session.verify().unwrap();
+    session.verify();
 }

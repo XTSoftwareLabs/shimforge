@@ -44,24 +44,26 @@ fn local_installation_errors_can_be_retried_and_cleanup_does_not_write_code() {
     fn value(seed: u64) -> u64 {
         seed.wrapping_add(1)
     }
-    let mut session = crate::Session::new_local().unwrap();
+    let mut session = crate::Session::new_local();
     for failed in [true, false] {
         let injection = failed.then(|| Inject::new(&[("protect memory", 1)]));
-        let result = crate::mock!(session, value, fn(u64) -> u64);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::mock!(session, value, fn(u64) -> u64)
+        }));
         drop(injection);
         if failed {
             assert!(result.is_err());
             assert_eq!(value(1), 2);
         } else {
-            result.unwrap().expect().once().returns(40).unwrap();
+            result.unwrap().expect().once().returns(40);
         }
     }
     assert_eq!(value(1), 40);
     {
         let _injection = Inject::new(&[("protect memory", 1)]);
-        session.restore().unwrap();
+        session.restore();
     }
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(value(1), 2);
 }
 
@@ -395,7 +397,7 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     }
     memory.protect(0, RX);
     platform::flush(memory.address, 257).unwrap();
-    let mut session = crate::Session::new_global().unwrap();
+    let mut session = crate::Session::new_global();
     // SAFETY: Both NOP/RET functions use the same void ABI. This test owns their
     // memory and keeps calls stopped while patching.
     unsafe {
@@ -403,21 +405,20 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
             (memory.address + 4) as *const (),
             (memory.address + 128) as *const (),
         )
-    }
-    .unwrap();
+    };
     let installed = read(memory.address, 32).unwrap();
-    assert!(matches!(
+    assert_eq!(
         // SAFETY: Both entries stay mapped and idle. The overlap is rejected before writing.
-        unsafe {
+        crate::tests::panic_message(|| unsafe {
             session.replace_raw(
                 memory.address as *const (),
                 (memory.address + 256) as *const (),
             )
-        },
-        Err(Error::Overlap)
-    ));
+        }),
+        Error::Overlap.to_string()
+    );
     assert_eq!(read(memory.address, 32).unwrap(), installed);
-    session.restore().unwrap();
+    session.restore();
     memory.assert_unchanged(memory.address, 32);
 }
 
@@ -436,18 +437,20 @@ fn installing_a_prefix_that_extends_into_an_active_patch_is_rejected() {
     let mut page = crate::executable::Executable::near(read as *const () as usize).unwrap();
     page.publish(&bytes).unwrap();
     let base = page.address();
-    let mut session = crate::Session::new_global().unwrap();
+    let mut session = crate::Session::new_global();
     // SAFETY: Both NOP/RET functions use the same void ABI. This test owns their
     // memory and keeps calls stopped while patching.
-    unsafe { session.replace_raw((base + 4) as *const (), (base + 32) as *const ()) }.unwrap();
+    unsafe { session.replace_raw((base + 4) as *const (), (base + 32) as *const ()) };
     let installed = read(base, 32).unwrap();
-    assert!(matches!(
+    assert_eq!(
         // SAFETY: Both entries stay mapped and idle. The overlap is rejected before writing.
-        unsafe { session.replace_raw(base as *const (), (base + 48) as *const ()) },
-        Err(Error::Overlap)
-    ));
+        crate::tests::panic_message(|| unsafe {
+            session.replace_raw(base as *const (), (base + 48) as *const ())
+        }),
+        Error::Overlap.to_string()
+    );
     assert_eq!(read(base, 32).unwrap(), installed);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(read(base, bytes.len()).unwrap(), bytes);
 }
 
@@ -470,13 +473,13 @@ fn a_generated_cet_function_can_execute_replace_and_restore() {
     // SAFETY: ENDBR64, NOPs, MOV EAX,7, RET form an extern C fn() -> u32.
     let source: extern "C" fn() -> u32 = unsafe { std::mem::transmute(memory.address) };
     assert_eq!(source(), 7);
-    let mut session = crate::Session::new_global().unwrap();
+    let mut session = crate::Session::new_global();
     // SAFETY: Both functions match in ABI and lifetime. Only this thread can call
     // the generated function, and calls are stopped while patching.
-    unsafe { session.replace_raw(source as *const (), native_replacement as *const ()) }.unwrap();
+    unsafe { session.replace_raw(source as *const (), native_replacement as *const ()) };
     assert_eq!(source(), 93);
     assert_eq!(read(memory.address, 4).unwrap(), [0xf3, 0x0f, 0x1e, 0xfa]);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(source(), 7);
     assert_eq!(read(memory.address, 26).unwrap(), code);
 }

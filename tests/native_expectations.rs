@@ -26,44 +26,43 @@ extern "C-unwind" fn unwind_sum(a: i64, b: i64) -> i64 {
 #[test]
 fn native_calls_match_arguments_and_count_captured_responses() {
     let _serial = serial();
-    let mut session = Session::new_global().unwrap();
-    let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64).unwrap();
+    let mut session = Session::new_global();
+    let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64);
     let mut results = vec![42, 24].into_iter();
     let count = sum
         .expect()
         .with(|a, b| *a == 6 && *b == 7)
         .times(2)
-        .returning(move |_, _| results.next().unwrap())
-        .unwrap();
+        .returning(move |_, _| results.next().unwrap());
     assert_eq!(native_sum(6, 7), 42);
     assert_eq!(native_sum(6, 7), 24);
     assert_eq!(count.calls(), 2);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(native_sum(6, 7), 13);
 }
 
 #[test]
 fn unsafe_and_system_functions_accept_expectations() {
     let _serial = serial();
-    let mut session = Session::new_global().unwrap();
-    let sum = mock!(session, unchecked_sum, unsafe fn(i64, i64) -> i64).unwrap();
-    sum.expect().once().returns(42).unwrap();
+    let mut session = Session::new_global();
+    let sum = mock!(session, unchecked_sum, unsafe fn(i64, i64) -> i64);
+    sum.expect().once().returns(42);
     // SAFETY: the function accepts all i64 values.
     assert_eq!(unsafe { unchecked_sum(6, 7) }, 42);
-    let system = mock!(session, system_sum, extern "system" fn(i64, i64) -> i64).unwrap();
-    system.expect().once().returning(|a, b| a * b).unwrap();
+    let system = mock!(session, system_sum, extern "system" fn(i64, i64) -> i64);
+    system.expect().once().returning(|a, b| a * b);
     assert_eq!(system_sum(6, 7), 42);
-    session.verify().unwrap();
+    session.verify();
 }
 
 #[test]
 fn unwind_abi_keeps_rust_panic_behavior() {
     let _serial = serial();
-    let mut session = Session::new_global().unwrap();
-    let sum = mock!(session, unwind_sum, extern "C-unwind" fn(i64, i64) -> i64).unwrap();
-    sum.expect().once().panics("chosen failure").unwrap();
+    let mut session = Session::new_global();
+    let sum = mock!(session, unwind_sum, extern "C-unwind" fn(i64, i64) -> i64);
+    sum.expect().once().panics("chosen failure");
     assert!(std::panic::catch_unwind(|| unwind_sum(6, 7)).is_err());
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(unwind_sum(6, 7), 13);
 }
 
@@ -71,9 +70,9 @@ fn unwind_abi_keeps_rust_panic_behavior() {
 fn native_panic_does_not_cross_the_abi_boundary() {
     const CHILD: &str = "SHIMFORGE_NATIVE_PANIC_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let mut session = Session::new_global().unwrap();
-        let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64).unwrap();
-        sum.expect().panics("native callback failed").unwrap();
+        let mut session = Session::new_global();
+        let sum = mock!(session, native_sum, extern "C" fn(i64, i64) -> i64);
+        sum.expect().panics("native callback failed");
         native_sum(1, 2);
         std::process::exit(99);
     }
@@ -98,13 +97,12 @@ fn native_panic_does_not_cross_the_abi_boundary() {
 fn imported_system_function_is_mocked_without_a_wrapper() {
     let _serial = serial();
     for constructor in [Session::new_global, Session::new] {
-        let mut session = constructor().unwrap();
+        let mut session = constructor();
         let hostname = mock!(
             session,
             libc::gethostname,
             unsafe extern "C" fn(*mut libc::c_char, usize) -> libc::c_int
-        )
-        .unwrap();
+        );
         hostname
             .expect()
             .with(|_, size| *size == 64)
@@ -115,14 +113,13 @@ fn imported_system_function_is_mocked_without_a_wrapper() {
                 // SAFETY: the caller provides a writable buffer of this size.
                 unsafe { std::ptr::copy_nonoverlapping(name.as_ptr().cast(), buffer, name.len()) };
                 0
-            })
-            .unwrap();
+            });
         let mut buffer = [0u8; 64];
         // SAFETY: buffer is writable for all 64 bytes.
         let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
         assert_eq!(result, 0);
         assert_eq!(&buffer[..10], b"test-host\0");
-        session.restore().unwrap();
+        session.restore();
     }
 }
 
@@ -135,27 +132,22 @@ fn imported_system_function_is_mocked_without_a_wrapper() {
     }
     let _serial = serial();
     for constructor in [Session::new_global, Session::new] {
-        let mut session = constructor().unwrap();
+        let mut session = constructor();
         let hostname = mock!(
             session,
             GetComputerNameW,
             unsafe extern "system" fn(*mut u16, *mut u32) -> i32
-        )
-        .unwrap();
-        hostname
-            .expect()
-            .once()
-            .returning(|buffer, size| {
-                let name: Vec<_> = "test-host\0".encode_utf16().collect();
-                // SAFETY: the caller supplies a valid size and a writable buffer.
-                unsafe {
-                    assert!(*size as usize >= name.len());
-                    std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
-                    *size = (name.len() - 1) as u32;
-                }
-                1
-            })
-            .unwrap();
+        );
+        hostname.expect().once().returning(|buffer, size| {
+            let name: Vec<_> = "test-host\0".encode_utf16().collect();
+            // SAFETY: the caller supplies a valid size and a writable buffer.
+            unsafe {
+                assert!(*size as usize >= name.len());
+                std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
+                *size = (name.len() - 1) as u32;
+            }
+            1
+        });
         let mut buffer = [0u16; 64];
         let mut size = buffer.len() as u32;
         // SAFETY: both pointers are valid; size describes the writable buffer.
@@ -165,6 +157,6 @@ fn imported_system_function_is_mocked_without_a_wrapper() {
             String::from_utf16(&buffer[..size as usize]).unwrap(),
             "test-host"
         );
-        session.restore().unwrap();
+        session.restore();
     }
 }

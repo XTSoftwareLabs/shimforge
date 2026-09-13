@@ -39,9 +39,9 @@ fn descend(depth: u32) -> u64 {
 
 #[test]
 fn deep_recursion_still_works_after_a_mock_is_installed() {
-    let mut session = Session::new().unwrap();
-    let limit = mock!(session, retry_limit, fn() -> u32).unwrap();
-    limit.expect().returns(9).unwrap();
+    let mut session = Session::new();
+    let limit = mock!(session, retry_limit, fn() -> u32);
+    limit.expect().returns(9);
 
     assert_eq!(retry_limit(), 9);
     assert_eq!(descend(1024), 1);
@@ -58,21 +58,21 @@ fn threads_that_patch_at_the_same_time_keep_their_stacks() {
             thread::Builder::new()
                 .stack_size(1 << 20)
                 .spawn(move || {
-                    let mut session = Session::new().unwrap();
+                    let mut session = Session::new();
                     match index % 3 {
                         0 => {
-                            let limit = mock!(session, retry_limit, fn() -> u32).unwrap();
-                            limit.expect().returns(11).unwrap();
+                            let limit = mock!(session, retry_limit, fn() -> u32);
+                            limit.expect().returns(11);
                             assert_eq!(retry_limit(), 11);
                         }
                         1 => {
-                            let size = mock!(session, batch_size, fn() -> u32).unwrap();
-                            size.expect().returns(256).unwrap();
+                            let size = mock!(session, batch_size, fn() -> u32);
+                            size.expect().returns(256);
                             assert_eq!(batch_size(), 256);
                         }
                         _ => {
-                            let tracing = mock!(session, tracing_enabled, fn() -> bool).unwrap();
-                            tracing.expect().returns(true).unwrap();
+                            let tracing = mock!(session, tracing_enabled, fn() -> bool);
+                            tracing.expect().returns(true);
                             assert!(tracing_enabled());
                         }
                     }

@@ -87,40 +87,36 @@ fn directory_creation_succeeds_without_creating_a_directory() {
     let _serial = serial();
     let root = Path::new("virtual/cache/reports");
     assert!(!root.exists());
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let create = mock!(
         session,
         fs::create_dir_all::<&Path>,
         fn(&Path) -> io::Result<()>
-    )
-    .unwrap();
+    );
     create
         .expect()
         .with(|path| **path == *Path::new("virtual/cache/reports"))
         .once()
-        .returning(|_| Ok(()))
-        .unwrap();
+        .returning(|_| Ok(()));
 
     assert!(prepare_cache(root).is_ok());
-    session.verify().unwrap();
+    session.verify();
     assert!(!root.exists());
 }
 
 #[test]
 fn directory_creation_failures_reach_the_caller() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let create = mock!(
         session,
         fs::create_dir_all::<&Path>,
         fn(&Path) -> io::Result<()>
-    )
-    .unwrap();
+    );
     create
         .expect()
         .once()
-        .returning(|_| Err(io::ErrorKind::PermissionDenied.into()))
-        .unwrap();
+        .returning(|_| Err(io::ErrorKind::PermissionDenied.into()));
 
     let error = prepare_cache(Path::new("virtual/cache/reports")).unwrap_err();
     assert!(error.starts_with("cannot prepare cache:"), "{error}");
@@ -132,25 +128,24 @@ fn path_predicates_answer_for_paths_that_do_not_exist() {
     let missing = Path::new("virtual/archive");
     assert_eq!(describe(missing), "missing");
     {
-        let mut session = Session::new().unwrap();
-        let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool).unwrap();
-        is_dir.expect().once().returns(true).unwrap();
+        let mut session = Session::new();
+        let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool);
+        is_dir.expect().once().returns(true);
         assert_eq!(describe(missing), "directory");
-        session.verify().unwrap();
+        session.verify();
     }
     {
-        let mut session = Session::new().unwrap();
-        let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool).unwrap();
-        is_dir.expect().once().returns(false).unwrap();
-        let exists = mock!(session, Path::exists, fn(&Path) -> bool).unwrap();
+        let mut session = Session::new();
+        let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool);
+        is_dir.expect().once().returns(false);
+        let exists = mock!(session, Path::exists, fn(&Path) -> bool);
         exists
             .expect()
             .with(|path| **path == *Path::new("virtual/archive"))
             .once()
-            .returns(true)
-            .unwrap();
+            .returns(true);
         assert_eq!(describe(missing), "file");
-        session.verify().unwrap();
+        session.verify();
     }
     assert_eq!(describe(missing), "missing");
 }
@@ -158,98 +153,82 @@ fn path_predicates_answer_for_paths_that_do_not_exist() {
 #[test]
 fn a_predicate_mock_can_require_an_exact_number_of_questions() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool).unwrap();
-    let expected = is_dir.expect().times(3).returns(true).unwrap();
+    let mut session = Session::new();
+    let is_dir = mock!(session, Path::is_dir, fn(&Path) -> bool);
+    let expected = is_dir.expect().times(3).returns(true);
     for name in ["virtual/a", "virtual/b", "virtual/c"] {
         assert!(Path::new(name).is_dir());
     }
     assert_eq!(expected.calls(), 3);
-    session.restore().unwrap();
+    session.restore();
     assert!(!Path::new("virtual/a").is_dir());
 }
 
 #[test]
 fn a_line_is_read_from_a_handle_that_never_reaches_disk() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>).unwrap();
+    let mut session = Session::new();
+    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>);
     open.expect()
         .with(|path| **path == *"virtual/inventory.csv")
         .once()
-        .returning(|_| Ok(detached_handle()))
-        .unwrap();
+        .returning(|_| Ok(detached_handle()));
     let read_line = mock!(
         session,
         BufReader::<File>::read_line,
         fn(&mut BufReader<File>, &mut String) -> io::Result<usize>
-    )
-    .unwrap();
-    read_line
-        .expect()
-        .once()
-        .returning(|_, line| {
-            line.push_str("sku,count,location\n");
-            Ok(line.len())
-        })
-        .unwrap();
+    );
+    read_line.expect().once().returning(|_, line| {
+        line.push_str("sku,count,location\n");
+        Ok(line.len())
+    });
 
     assert_eq!(
         read_header("virtual/inventory.csv").unwrap(),
         "sku,count,location"
     );
-    session.verify().unwrap();
+    session.verify();
 }
 
 #[test]
 fn a_write_is_accepted_without_a_writable_handle() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>).unwrap();
-    open.expect()
-        .once()
-        .returning(|_| Ok(detached_handle()))
-        .unwrap();
+    let mut session = Session::new();
+    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>);
+    open.expect().once().returning(|_| Ok(detached_handle()));
     let write_all = mock!(
         session,
         File::write_all,
         fn(&mut File, &[u8]) -> io::Result<()>
-    )
-    .unwrap();
+    );
     write_all
         .expect()
         .with(|_, bytes| **bytes == *b"sku-77,3,aisle-2\n")
         .once()
-        .returning(|_, _| Ok(()))
-        .unwrap();
+        .returning(|_, _| Ok(()));
 
     assert_eq!(
         append_entry("virtual/inventory.csv", "sku-77,3,aisle-2\n").unwrap(),
         17
     );
-    session.verify().unwrap();
+    session.verify();
 }
 
 #[test]
 fn a_write_error_is_reported_to_the_caller() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
-    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>).unwrap();
-    open.expect()
-        .once()
-        .returning(|_| Ok(detached_handle()))
-        .unwrap();
+    let mut session = Session::new();
+    let open = mock!(session, File::open::<&str>, fn(&str) -> io::Result<File>);
+    open.expect().once().returning(|_| Ok(detached_handle()));
     let write_all = mock!(
         session,
         File::write_all,
         fn(&mut File, &[u8]) -> io::Result<()>
-    )
-    .unwrap();
+    );
     write_all
         .expect()
         .once()
-        .returning(|_, _| Err(io::ErrorKind::StorageFull.into()))
-        .unwrap();
+        .returning(|_, _| Err(io::ErrorKind::StorageFull.into()));
 
     assert_eq!(
         append_entry("virtual/inventory.csv", "sku-77,3,aisle-2\n")

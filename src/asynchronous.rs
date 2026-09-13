@@ -1,3 +1,4 @@
+use crate::error::check;
 use crate::expectation::{Config, Control, Meta, Rule, State, lock};
 use crate::{CallCount, Error, Expectation, Sequence, Session};
 use std::any::Any;
@@ -50,7 +51,12 @@ impl Session {
     /// The future's layout and drop code stay unchanged.
     /// Do not pass a boxed trait object: its poll wrapper is shared by unrelated
     /// futures. Mock the method returning that box with [`crate::mock!`] instead.
-    pub fn mock_async<F>(&mut self, witness: F) -> Result<AsyncMock<F::Output>, Error>
+    ///
+    /// # Panics
+    ///
+    /// Panics if this future type is already mocked or its poll method cannot be patched.
+    #[track_caller]
+    pub fn mock_async<F>(&mut self, witness: F) -> AsyncMock<F::Output>
     where
         F: Future,
         F::Output: Send + 'static,
@@ -59,18 +65,18 @@ impl Session {
         drop(witness);
         let state = State::new(std::any::type_name::<F>());
         let key = (source as usize, self.__thread());
-        register(key, state.clone())?;
+        check(register(key, state.clone()));
         let control: Arc<dyn Control> = state.clone();
         // SAFETY: both poll functions use F's exact signature and output type.
-        unsafe {
+        check(unsafe {
             self.__install(
                 source,
                 poll_mock::<F> as *const (),
                 control,
                 Box::new(move || remove(key)),
-            )?;
-        }
-        Ok(AsyncMock { state })
+            )
+        });
+        AsyncMock { state }
     }
 }
 
@@ -170,14 +176,16 @@ impl<R: Send + 'static> AsyncMock<R> {
         }
     }
 
-    /// Checks call counts and reports unexpected calls.
-    pub fn verify(&self) -> Result<(), Error> {
-        self.state.verify()
+    /// Checks call counts and unexpected calls, and panics if either failed.
+    #[track_caller]
+    pub fn verify(&self) {
+        check(self.state.verify());
     }
 
-    /// Checks expectations, then clears them for the next phase.
-    pub fn checkpoint(&self) -> Result<(), Error> {
-        self.state.checkpoint()
+    /// Checks expectations like [`Self::verify`], then clears them for the next phase.
+    #[track_caller]
+    pub fn checkpoint(&self) {
+        check(self.state.checkpoint());
     }
 }
 
@@ -201,28 +209,29 @@ impl<R: Send + 'static> AsyncExpectation<R> {
     }
 
     /// Calls a closure for each response. The closure may own captured values.
-    pub fn returning(
-        self,
-        action: impl FnMut() -> R + Send + 'static,
-    ) -> Result<Expectation, Error> {
-        self.state.add(self.config, |meta| AsyncRule {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the call count is invalid or the mock is no longer active.
+    #[track_caller]
+    pub fn returning(self, action: impl FnMut() -> R + Send + 'static) -> Expectation {
+        check(self.state.add(self.config, |meta| AsyncRule {
             meta,
             action: Mutex::new(Box::new(action)),
-        })
+        }))
     }
 
     /// Calls a closure at most once, moving its captured values if needed.
-    pub fn returning_once(
-        mut self,
-        action: impl FnOnce() -> R + Send + 'static,
-    ) -> Result<Expectation, Error> {
-        self.config = self.config.for_once()?;
+    #[track_caller]
+    pub fn returning_once(mut self, action: impl FnOnce() -> R + Send + 'static) -> Expectation {
+        self.config = check(self.config.for_once());
         let mut action = Some(action);
         self.returning(move || action.take().expect("one-time response was already used")())
     }
 
     /// Clones the value for each response.
-    pub fn returns(self, value: R) -> Result<Expectation, Error>
+    #[track_caller]
+    pub fn returns(self, value: R) -> Expectation
     where
         R: Clone,
     {
@@ -230,12 +239,14 @@ impl<R: Send + 'static> AsyncExpectation<R> {
     }
 
     /// Moves the value into one response. It need not implement `Clone`.
-    pub fn return_once(self, value: R) -> Result<Expectation, Error> {
+    #[track_caller]
+    pub fn return_once(self, value: R) -> Expectation {
         self.returning_once(move || value)
     }
 
     /// Creates a default value for each response.
-    pub fn returns_default(self) -> Result<Expectation, Error>
+    #[track_caller]
+    pub fn returns_default(self) -> Expectation
     where
         R: Default,
     {
@@ -243,13 +254,15 @@ impl<R: Send + 'static> AsyncExpectation<R> {
     }
 
     /// Panics with this message when called.
-    pub fn panics(self, message: impl Into<String>) -> Result<Expectation, Error> {
+    #[track_caller]
+    pub fn panics(self, message: impl Into<String>) -> Expectation {
         let message = message.into();
         self.returning(move || panic!("{message}"))
     }
 
     /// Rejects every poll of this future type.
-    pub fn never(self) -> Result<Expectation, Error> {
+    #[track_caller]
+    pub fn never(self) -> Expectation {
         self.times(0).panics("poll is forbidden")
     }
 }
