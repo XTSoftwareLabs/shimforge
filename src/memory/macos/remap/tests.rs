@@ -113,3 +113,43 @@ fn failed_rollback_steps_use_the_fatal_policy() {
         assert!(result.is_err(), "{failures:?}");
     }
 }
+
+#[test]
+fn a_short_read_never_stages_a_partial_page() {
+    let size = super::super::page_size().unwrap();
+    let protection = (libc::PROT_READ | libc::PROT_EXEC) as u32;
+    let target = Image::new(&vec![0x90; size], protection).unwrap();
+    let page = PageRange {
+        address: target.address,
+        length: size,
+        protection,
+    };
+    let result = stage_and_install(
+        target.address,
+        &[1, 2, 3, 4],
+        &[page],
+        || panic!("rollback failed"),
+        &mut |address, length| {
+            let mut bytes = read_bytes(address, length)?;
+            bytes.pop();
+            Ok(bytes)
+        },
+    );
+    assert_eq!(result, Err(Error::InvalidRange));
+    assert_eq!(read_bytes(target.address, 4).unwrap(), [0x90; 4]);
+}
+
+#[test]
+fn a_failed_release_is_reported_and_retried_on_drop() {
+    let image = Image::new(&[0x90; 4], (libc::PROT_READ | libc::PROT_EXEC) as u32).unwrap();
+    let injection = Inject::new(&[("release patch", 1)]);
+    assert!(matches!(
+        image.release(),
+        Err(Error::Os {
+            operation: "release patch",
+            ..
+        })
+    ));
+    drop(injection);
+    // The failed call left the mapping in place. Drop releases it without a fault.
+}

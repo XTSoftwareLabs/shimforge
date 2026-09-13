@@ -79,13 +79,22 @@ impl Image {
     }
 }
 
+impl Image {
+    fn release(&self) -> Result<(), Error> {
+        // SAFETY: no references to this owned mapping remain.
+        let result = syscall("release patch", -1, || unsafe {
+            libc::munmap(self.address as *mut _, self.length)
+        });
+        if result != 0 {
+            return Err(os_error("release patch"));
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Image {
     fn drop(&mut self) {
-        // SAFETY: no references to this owned mapping remain.
-        let result = unsafe { libc::munmap(self.address as *mut _, self.length) };
-        if result != 0 {
-            std::process::abort();
-        }
+        crate::finish(self.release(), std::process::abort);
     }
 }
 
@@ -95,10 +104,21 @@ pub(crate) fn replace_pages(
     pages: &[PageRange],
     fatal: fn() -> !,
 ) -> Result<(), Error> {
+    stage_and_install(address, replacement, pages, fatal, &mut read_bytes)
+}
+
+fn stage_and_install(
+    address: usize,
+    replacement: &[u8],
+    pages: &[PageRange],
+    fatal: fn() -> !,
+    read: &mut dyn FnMut(usize, usize) -> Result<Vec<u8>, Error>,
+) -> Result<(), Error> {
     let end = address + replacement.len();
     let mut images = Vec::new();
     for page in pages {
-        let mut bytes = read_bytes(page.address, page.length)?;
+        // Mach reports how much it copied. Never stage part of a page.
+        let mut bytes = read(page.address, page.length)?;
         if bytes.len() != page.length {
             return Err(Error::InvalidRange);
         }
