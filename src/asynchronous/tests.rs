@@ -13,25 +13,21 @@ fn poll(seed: u64) -> Poll<u64> {
 fn local_async_duplicates_and_original_polls_are_checked() {
     let _serial = crate::tests::serial();
     {
-        let mut session = Session::new_global().unwrap();
-        session
-            .mock_async(value(1))
-            .unwrap()
-            .expect()
-            .once()
-            .returns(30)
-            .unwrap();
+        let mut session = Session::new_global();
+        session.mock_async(value(1)).expect().once().returns(30);
         assert_eq!(poll(1), Poll::Ready(30));
     }
-    let mut session = Session::new_local().unwrap();
-    let mock = session.mock_async(value(1)).unwrap();
-    mock.expect().once().returns(40).unwrap();
-    assert!(session.mock_async(value(1)).is_err());
+    let mut session = Session::new_local();
+    let mock = session.mock_async(value(1));
+    mock.expect().once().returns(40);
+    assert!(
+        crate::tests::panic_message(|| session.mock_async(value(1))).contains("already mocked")
+    );
     assert_eq!(poll(1), Poll::Ready(40));
     assert_eq!(
         std::thread::spawn(|| poll(1)).join().unwrap(),
         Poll::Ready(2)
     );
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(poll(1), Poll::Ready(2));
 }

@@ -35,22 +35,21 @@ use shimforge::{Session, mock};
 use std::io;
 
 #[test]
-fn claim_slot_succeeds_without_a_real_directory() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
+fn claim_slot_succeeds_without_a_real_directory() {
+    let mut session = Session::new();
     let create = mock!(
         session,
         fs::create_dir_all::<&str>,
         fn(&str) -> io::Result<()>
-    )?;
+    );
     create
         .expect()
         .with(|path| *path == "/var/run/dispatcher")
         .once()
-        .returning(|_| Ok(()))?;
+        .returning(|_| Ok(()));
 
     assert!(claim_slot().is_ok());
-    session.verify()?;
-    Ok(())
+    session.verify();
 }
 ```
 
@@ -93,8 +92,8 @@ Import the two macros and the session type, then run `cargo test` as usual:
 use shimforge::{Session, mock, replace};
 ```
 
-Every example below is a complete test. It returns `Result<(), shimforge::Error>`,
-so `?` turns a shimforge error into a test failure.
+Every example below is a complete test. shimforge panics when a mock cannot be
+installed or an expectation is not met, so there is no `Result` to handle.
 
 ## Thread-local and global sessions
 
@@ -114,15 +113,14 @@ fn worker_count() -> usize {
 }
 
 #[test]
-fn other_threads_keep_the_original_function() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let count = mock!(session, worker_count, fn() -> usize)?;
-    count.expect().returns(16)?;
+fn other_threads_keep_the_original_function() {
+    let mut session = Session::new();
+    let count = mock!(session, worker_count, fn() -> usize);
+    count.expect().returns(16);
 
     assert_eq!(worker_count(), 16);
     // A thread with no session of its own still calls the original.
     assert_eq!(std::thread::spawn(worker_count).join().unwrap(), 2);
-    Ok(())
 }
 ```
 
@@ -144,15 +142,14 @@ fn export_state(marker: &Path) -> &'static str {
 }
 
 #[test]
-fn a_constant_result_answers_every_call() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let exists = mock!(session, Path::exists, fn(&Path) -> bool)?;
-    exists.expect().returns(true)?;
+fn a_constant_result_answers_every_call() {
+    let mut session = Session::new();
+    let exists = mock!(session, Path::exists, fn(&Path) -> bool);
+    exists.expect().returns(true);
 
     assert_eq!(export_state(Path::new("virtual/export.done")), "finished");
-    session.restore()?;
+    session.restore();
     assert_eq!(export_state(Path::new("virtual/export.done")), "running");
-    Ok(())
 }
 ```
 
@@ -174,22 +171,21 @@ fn load_port(path: &Path) -> io::Result<u16> {
 }
 
 #[test]
-fn matching_calls_are_counted() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
+fn matching_calls_are_counted() {
+    let mut session = Session::new();
     let read = mock!(
         session,
         fs::read_to_string::<&Path>,
         fn(&Path) -> io::Result<String>
-    )?;
+    );
     read.expect()
         .with(|path| *path == Path::new("service.port"))
         .times(2)
-        .returning(|_| Ok("8080\n".to_owned()))?;
+        .returning(|_| Ok("8080\n".to_owned()));
 
     assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
     assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
-    session.verify()?;
-    Ok(())
+    session.verify();
 }
 ```
 
@@ -231,10 +227,10 @@ fn save_id(id: u64) -> bool {
 }
 
 #[test]
-fn results_follow_the_call_order() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let next = mock!(session, next_id, fn() -> u64)?;
-    let save = mock!(session, save_id, fn(u64) -> bool)?;
+fn results_follow_the_call_order() {
+    let mut session = Session::new();
+    let next = mock!(session, next_id, fn() -> u64);
+    let save = mock!(session, save_id, fn(u64) -> bool);
     let order = Sequence::new();
     let mut id = 40;
     next.expect()
@@ -243,18 +239,17 @@ fn results_follow_the_call_order() -> Result<(), shimforge::Error> {
         .returning(move || {
             id += 1;
             id
-        })?;
+        });
     save.expect()
         .with(|id| *id == 42)
         .once()
         .in_sequence(&order)
-        .returns(true)?;
+        .returns(true);
 
     assert_eq!(next_id(), 41);
     assert_eq!(next_id(), 42);
     assert!(save_id(42));
-    session.verify()?;
-    Ok(())
+    session.verify();
 }
 ```
 
@@ -277,9 +272,9 @@ fn fill(buffer: &mut [u8]) -> usize {
 }
 
 #[test]
-fn a_mock_fills_output_parameters() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let split = mock!(session, split_amount, fn(u64, &mut u64, &mut u64))?;
+fn a_mock_fills_output_parameters() {
+    let mut session = Session::new();
+    let split = mock!(session, split_amount, fn(u64, &mut u64, &mut u64));
     split
         .expect()
         .with(|total, _, _| *total == 1234)
@@ -287,12 +282,12 @@ fn a_mock_fills_output_parameters() -> Result<(), shimforge::Error> {
         .returning(|_, whole, cents| {
             *whole = 99;
             *cents = 5;
-        })?;
-    let write = mock!(session, fill, fn(&mut [u8]) -> usize)?;
+        });
+    let write = mock!(session, fill, fn(&mut [u8]) -> usize);
     write.expect().once().returning(|buffer| {
         buffer[..2].copy_from_slice(b"ok");
         2
-    })?;
+    });
 
     let (mut whole, mut cents) = (0, 0);
     split_amount(1234, &mut whole, &mut cents);
@@ -301,7 +296,6 @@ fn a_mock_fills_output_parameters() -> Result<(), shimforge::Error> {
     let mut buffer = [0; 8];
     assert_eq!(fill(&mut buffer), 2);
     assert_eq!(&buffer[..2], b"ok");
-    Ok(())
 }
 ```
 
@@ -331,16 +325,16 @@ fn render<T: Display>(value: T) -> String {
 }
 
 #[test]
-fn a_method_and_one_generic_instance_are_mocked() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let rates = mock!(session, Cache::hit_rate, fn(&Cache, &str) -> f32)?;
+fn a_method_and_one_generic_instance_are_mocked() {
+    let mut session = Session::new();
+    let rates = mock!(session, Cache::hit_rate, fn(&Cache, &str) -> f32);
     rates
         .expect()
         .with(|cache, key| cache.region == "eu" && *key == "sessions")
         .once()
-        .returns(0.75)?;
-    let rendered = mock!(session, render::<u8>, fn(u8) -> String)?;
-    rendered.expect().once().returns("mocked".to_owned())?;
+        .returns(0.75);
+    let rendered = mock!(session, render::<u8>, fn(u8) -> String);
+    rendered.expect().once().returns("mocked".to_owned());
 
     let cache = Cache {
         region: "eu".to_owned(),
@@ -349,7 +343,6 @@ fn a_method_and_one_generic_instance_are_mocked() -> Result<(), shimforge::Error
     assert_eq!(render(7u8), "mocked");
     // A different type argument is a different function.
     assert_eq!(render("7"), "live 7");
-    Ok(())
 }
 ```
 
@@ -371,15 +364,14 @@ fn fixed_checksum(_bytes: &[u8]) -> u32 {
 }
 
 #[test]
-fn a_function_or_closure_replaces_the_original() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    replace!(session, checksum => fixed_checksum, fn(&[u8]) -> u32)?;
+fn a_function_or_closure_replaces_the_original() {
+    let mut session = Session::new();
+    replace!(session, checksum => fixed_checksum, fn(&[u8]) -> u32);
     assert_eq!(checksum(b"abc"), 7);
-    session.restore()?;
+    session.restore();
 
-    replace!(session, checksum => |_| 9, fn(&[u8]) -> u32)?;
+    replace!(session, checksum => |_| 9, fn(&[u8]) -> u32);
     assert_eq!(checksum(b"abc"), 9);
-    Ok(())
 }
 ```
 
@@ -424,26 +416,25 @@ fn ready<F: Future>(future: F) -> F::Output {
 }
 
 #[test]
-fn async_functions_return_mocked_results() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
-    let rates = session.mock_async(exchange_rate(""))?;
-    rates.expect().once().returns(1.25)?;
+fn async_functions_return_mocked_results() {
+    let mut session = Session::new();
+    let rates = session.mock_async(exchange_rate(""));
+    rates.expect().once().returns(1.25);
     // A throwaway receiver is enough to name the future type.
     let balances = session.mock_async(
         Ledger {
             name: String::new(),
         }
         .balance(),
-    )?;
-    balances.expect().once().returns(4_200)?;
+    );
+    balances.expect().once().returns(4_200);
 
     assert_eq!(ready(exchange_rate("EURUSD")), 1.25);
     let ledger = Ledger {
         name: "payroll".to_owned(),
     };
     assert_eq!(ready(ledger.balance()), 4_200);
-    session.verify()?;
-    Ok(())
+    session.verify();
 }
 ```
 
@@ -482,17 +473,17 @@ impl Client {
 }
 
 #[test]
-fn a_client_method_that_returns_a_boxed_future_is_mocked() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
+fn a_client_method_that_returns_a_boxed_future_is_mocked() {
+    let mut session = Session::new();
     let get = mock!(
         session,
         Client::get,
         for<'a> fn(&'a Client, &'a str) -> Call<'a>
-    )?;
+    );
     get.expect()
         .with(|_, path| *path == "/health")
         .once()
-        .returning(|_, _| Box::pin(async { Ok("healthy".to_owned()) }))?;
+        .returning(|_, _| Box::pin(async { Ok("healthy".to_owned()) }));
 
     let client = Client {
         endpoint: "https://inventory.invalid".to_owned(),
@@ -503,8 +494,7 @@ fn a_client_method_that_returns_a_boxed_future_is_mocked() -> Result<(), shimfor
         response.as_mut().poll(&mut context),
         Poll::Ready(Ok(body)) if body == "healthy"
     ));
-    session.verify()?;
-    Ok(())
+    session.verify();
 }
 ```
 
@@ -524,13 +514,13 @@ unsafe extern "C" {
 }
 
 #[test]
-fn getenv_reports_a_mocked_variable() -> Result<(), shimforge::Error> {
-    let mut session = Session::new()?;
+fn getenv_reports_a_mocked_variable() {
+    let mut session = Session::new();
     let lookup = mock!(
         session,
         getenv,
         unsafe extern "C" fn(*const c_char) -> *mut c_char
-    )?;
+    );
     lookup
         .expect()
         .with(|name| {
@@ -539,15 +529,14 @@ fn getenv_reports_a_mocked_variable() -> Result<(), shimforge::Error> {
             name == c"DEPLOY_SLOT"
         })
         .once()
-        .returning(|_| c"canary".as_ptr().cast_mut())?;
+        .returning(|_| c"canary".as_ptr().cast_mut());
     // Any other variable keeps reporting that it is unset.
-    lookup.expect().returning(|_| std::ptr::null_mut())?;
+    lookup.expect().returning(|_| std::ptr::null_mut());
 
     let key = CString::new("DEPLOY_SLOT").unwrap();
     // SAFETY: the key is a valid C string and the result is only read.
     let slot = unsafe { CStr::from_ptr(getenv(key.as_ptr())) };
     assert_eq!(slot.to_str().unwrap(), "canary");
-    Ok(())
 }
 ```
 
@@ -572,16 +561,15 @@ fn fake_slot_count() -> usize {
 }
 
 #[test]
-fn a_raw_replacement_swaps_one_function_for_another() -> Result<(), shimforge::Error> {
-    let mut session = Session::new_global()?;
+fn a_raw_replacement_swaps_one_function_for_another() {
+    let mut session = Session::new_global();
     // SAFETY: both functions are live, share a signature, and stay loaded until the
     // session restores them. No thread calls them while the patch is installed.
-    unsafe { session.replace_raw(slot_count as *const (), fake_slot_count as *const ())? };
+    unsafe { session.replace_raw(slot_count as *const (), fake_slot_count as *const ()) };
 
     assert_eq!(slot_count(), 64);
-    session.restore()?;
+    session.restore();
     assert_eq!(slot_count(), 4);
-    Ok(())
 }
 ```
 
@@ -594,10 +582,10 @@ second panic. `session.restore()` removes the mocks early and checks them, and
 
 Each thread may hold one session. Local sessions may coexist on different threads,
 even for the same function. Global sessions wait for other sessions to finish, and
-local sessions wait for an active global session. A nested session returns
-`Error::Busy`; `try_new_local()` and `try_new_global()` return `Error::Busy`
-instead of waiting. Both modes support `mock!`, `replace!`, and `mock_async`;
-`replace_raw` requires a global session.
+local sessions wait for an active global session. Opening a nested session panics;
+`try_new_local()` and `try_new_global()` return `Err(Error::Busy)` instead of
+waiting. Both modes support `mock!`, `replace!`, and `mock_async`; `replace_raw`
+requires a global session.
 
 Install a local mock before calls to that target start. Only the first local
 installation changes code; later installs and cleanup leave the entry in place so

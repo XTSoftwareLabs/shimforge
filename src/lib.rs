@@ -31,6 +31,7 @@ pub use shimforge_macros::{__check_signature, __mock, __replace_local};
 
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::error::check;
     pub use crate::expectation::{CallGuard, Config, Control, Meta, Rule, State, lock};
     pub use crate::routing::route;
 }
@@ -98,14 +99,22 @@ impl Session {
     }
 
     /// Opens a thread-local session. See [`Self::new_local`].
-    pub fn new() -> Result<Self, Error> {
+    // Opening a session takes a lock and may wait or panic, so it is not a default value.
+    #[allow(clippy::new_without_default)]
+    #[track_caller]
+    pub fn new() -> Self {
         Self::new_local()
     }
 
     /// Opens a global session. Mocks affect all threads.
-    /// Waits for other threads' sessions to end. Nested sessions return [`Error::Busy`].
-    pub fn new_global() -> Result<Self, Error> {
-        Self::open(false, true)
+    /// Waits for other threads' sessions to end.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this thread already has a session.
+    #[track_caller]
+    pub fn new_global() -> Self {
+        error::check(Self::open(false, true))
     }
 
     /// Opens a session whose mocks affect only the current thread.
@@ -113,16 +122,23 @@ impl Session {
     /// Only one local session may be active per thread. Global sessions exclude
     /// local sessions, so this waits for them to end. Stop target calls during
     /// the first installation. Later local installs and cleanup do not patch code.
-    pub fn new_local() -> Result<Self, Error> {
-        Self::open(true, true)
+    ///
+    /// # Panics
+    ///
+    /// Panics if this thread already has a session.
+    #[track_caller]
+    pub fn new_local() -> Self {
+        error::check(Self::open(true, true))
     }
 
     /// Opens a local session without waiting for an active global session.
+    /// Returns [`Error::Busy`] instead of waiting or panicking.
     pub fn try_new_local() -> Result<Self, Error> {
         Self::open(true, false)
     }
 
     /// Opens a global session without waiting for other sessions.
+    /// Returns [`Error::Busy`] instead of waiting or panicking.
     pub fn try_new_global() -> Result<Self, Error> {
         Self::open(false, false)
     }
@@ -203,11 +219,18 @@ impl Session {
     /// Calls must reach the source entry. Inlined or merged calls cannot be isolated.
     /// Do not replace functions used by shimforge or its memory and OS code.
     /// The replacement must meet the safety rules its callers rely on.
-    pub unsafe fn replace_raw(
-        &mut self,
-        source: *const (),
-        target: *const (),
-    ) -> Result<(), Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the session is local or the replacement cannot be installed.
+    #[track_caller]
+    pub unsafe fn replace_raw(&mut self, source: *const (), target: *const ()) {
+        // SAFETY: the caller follows this method's safety contract.
+        error::check(unsafe { self.install_raw(source, target) });
+    }
+
+    /// Installs a raw replacement under the rules of [`Self::replace_raw`].
+    unsafe fn install_raw(&mut self, source: *const (), target: *const ()) -> Result<(), Error> {
         if self.__thread().is_some() {
             return Err(Error::Expectation(
                 "use mock! or mock_async in a local session".into(),
@@ -271,7 +294,16 @@ impl Session {
     }
 
     /// Checks all call expectations without removing the mocks.
-    pub fn verify(&self) -> Result<(), Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if a mock missed expected calls or received a call it rejected.
+    #[track_caller]
+    pub fn verify(&self) {
+        error::check(self.check_expectations());
+    }
+
+    fn check_expectations(&self) -> Result<(), Error> {
         for mock in &self.mocks {
             mock.control.verify()?;
         }
@@ -300,7 +332,7 @@ impl Session {
                 routing::install(source as usize, target as usize)?;
                 self.local_patches.push(source as usize);
             } else {
-                self.replace_raw(source, target)?;
+                self.install_raw(source, target)?;
             }
         }
         self.mocks.push(mock);
@@ -309,14 +341,19 @@ impl Session {
 
     /// Removes all mocks, then checks their expectations.
     ///
-    /// Stop global target calls as required by [`Self::replace_raw`]. On error,
-    /// a failed patch stays in the session so you can retry. Expectation errors
-    /// are returned after all patches have been removed.
-    pub fn restore(&mut self) -> Result<(), Error> {
-        self.restore_patches()?;
-        let result = self.verify();
+    /// Stop global target calls as required by [`Self::replace_raw`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if original code cannot be restored. The failed patch stays in the
+    /// session, so a later `restore` or the drop retries it. Also panics, after all
+    /// mocks are removed, if an expectation failed.
+    #[track_caller]
+    pub fn restore(&mut self) {
+        error::check(self.restore_patches());
+        let result = self.check_expectations();
         self.detach();
-        result
+        error::check(result);
     }
 
     fn detach(&mut self) {
@@ -345,7 +382,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         finish(self.restore_patches(), std::process::abort);
-        let result = self.verify();
+        let result = self.check_expectations();
         self.detach();
         if !std::thread::panicking() {
             if let Err(error) = result {
@@ -359,79 +396,79 @@ impl Drop for Session {
 ///
 /// ```
 /// fn read_count(key: &str) -> usize { key.len() }
-/// let mut session = shimforge::Session::new()?;
-/// let mock = shimforge::mock!(session, read_count, fn(&str) -> usize)?;
-/// mock.expect().with(|key| *key == "orders").once().returns(12)?;
+/// let mut session = shimforge::Session::new();
+/// let mock = shimforge::mock!(session, read_count, fn(&str) -> usize);
+/// mock.expect().with(|key| *key == "orders").once().returns(12);
 /// assert_eq!(read_count("orders"), 12);
-/// # Ok::<(), shimforge::Error>(())
 /// ```
 ///
 /// Matchers borrow arguments. Return closures may capture owned values and must
 /// be `Send + 'static`. Follow the same runtime safety rules as [`replace!`].
+/// Installation panics if the function cannot be patched.
 ///
 /// The source signature must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: u64) -> u64 { value }
 /// shimforge::mock!(session, source, fn(u32) -> u32);
 /// ```
 /// A replacement cannot require a longer input borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: &str) -> usize { value.len() }
 /// shimforge::mock!(session, source, fn(&'static str) -> usize);
 /// ```
 /// Type aliases do not bypass this check:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: &str) -> usize { value.len() }
 /// type Input = &'static str;
 /// shimforge::mock!(session, source, fn(Input) -> usize);
 /// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(_: &str) -> &'static str { "fixed" }
 /// shimforge::mock!(session, source, fn(&str) -> &str);
 /// ```
 /// A result must stay tied to the same argument:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
 /// shimforge::mock!(session, source, for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
 /// ```
 /// Caller names cannot shadow the checks:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn __target(_: &str) -> &'static str { "fixed" }
 /// shimforge::mock!(session, __target, fn(&str) -> &str);
 /// ```
 /// Captures must be safe to send between threads:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source() -> usize { 1 }
-/// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
+/// let mock = shimforge::mock!(session, source, fn() -> usize);
 /// let value = std::rc::Rc::new(2);
 /// mock.expect().returning(move || *value);
 /// ```
 /// Captures must outlive the test's stack:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source() -> usize { 1 }
-/// let mock = shimforge::mock!(session, source, fn() -> usize).unwrap();
+/// let mock = shimforge::mock!(session, source, fn() -> usize);
 /// let value = String::from("token");
 /// mock.expect().returning(|| value.len());
 /// ```
 /// Return closures cannot create dangling references:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: &str) -> &str { value }
-/// let mock = shimforge::mock!(session, source, fn(&str) -> &str).unwrap();
+/// let mock = shimforge::mock!(session, source, fn(&str) -> &str);
 /// mock.expect().returning(|_| String::from("temporary").as_str());
 /// ```
 /// Calling conventions must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// extern "C" fn source() -> usize { 1 }
 /// shimforge::mock!(session, source, fn() -> usize);
 /// ```
@@ -484,61 +521,61 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// ```no_run
 /// # fn original(x: i32) -> i32 { x + 1 }
 /// # fn fake(x: i32) -> i32 { x + 10 }
-/// let mut session = shimforge::Session::new_global()?;
-/// shimforge::replace!(session, original => fake, fn(i32) -> i32)?;
-/// # Ok::<(), shimforge::Error>(())
+/// let mut session = shimforge::Session::new_global();
+/// shimforge::replace!(session, original => fake, fn(i32) -> i32);
 /// ```
 ///
 /// No `unsafe` block is needed. Follow the crate's safety rules. Lifetime checks
 /// are best effort; do not narrow lifetimes to force a type match. Closures
-/// without captures are accepted.
+/// without captures are accepted. Installation panics if the function cannot be
+/// patched.
 ///
 /// Incompatible signatures are rejected:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x: u64| x, fn(u32) -> u32);
 /// ```
 /// The source must also match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(x: u64) -> u64 { x }
 /// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
 /// ```
 /// Input borrows cannot be narrowed:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: &str) -> usize { value.len() }
 /// shimforge::replace!(session, source => |value| value.len(), fn(&'static str) -> usize);
 /// ```
 /// This also applies to mutable borrows:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(value: &mut usize) { *value += 1; }
 /// shimforge::replace!(session, source => |_| (), fn(&'static mut usize));
 /// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source(_: &str) -> &'static str { "fixed" }
 /// shimforge::replace!(session, source => |value| value, fn(&str) -> &str);
 /// ```
 /// A result must stay tied to the same argument:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// fn source<'a, 'b>(left: &'a str, _: &'b str) -> &'a str { left }
 /// shimforge::replace!(session, source => |_, right| right,
 ///     for<'a, 'b> fn(&'a str, &'b str) -> &'b str);
 /// ```
 /// Calling conventions must match:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// extern "C" fn source(x: u32) -> u32 { x }
 /// shimforge::replace!(session, source => |x| x, fn(u32) -> u32);
 /// ```
 /// Capturing closures are rejected:
 /// ```compile_fail
-/// let mut session = shimforge::Session::new_global().unwrap();
+/// let mut session = shimforge::Session::new_global();
 /// let captured = String::from("hello");
 /// fn source() -> usize { 1 }
 /// shimforge::replace!(session, source => || captured.len(), fn() -> usize);

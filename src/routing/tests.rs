@@ -92,8 +92,8 @@ fn conditional_entry_branches_execute_on_unmocked_threads() {
     let source: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(page.address()) };
     assert_eq!(source(0), 0);
     assert_eq!(source(1), 42);
-    let mut session = crate::Session::new().unwrap();
-    crate::replace!(session, source => fake, extern "C" fn(i32) -> i32).unwrap();
+    let mut session = crate::Session::new();
+    crate::replace!(session, source => fake, extern "C" fn(i32) -> i32);
     assert_eq!(source(0), 99);
     std::thread::spawn(move || {
         assert_eq!(source(0), 0);
@@ -101,13 +101,13 @@ fn conditional_entry_branches_execute_on_unmocked_threads() {
     })
     .join()
     .unwrap();
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(source(1), 42);
     drop(session);
-    let mut session = crate::Session::new_global().unwrap();
-    crate::replace!(session, source => fake, extern "C" fn(i32) -> i32).unwrap();
+    let mut session = crate::Session::new_global();
+    crate::replace!(session, source => fake, extern "C" fn(i32) -> i32);
     assert_eq!(source(1), 99);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(source(1), 42);
     std::mem::forget(page);
 }
@@ -142,11 +142,11 @@ fn a_relocated_call_returns_to_the_original_function() {
     // SAFETY: the page is a complete C function with this signature.
     let source: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(page.address()) };
     assert_eq!(source(1), 5);
-    let mut session = crate::Session::new().unwrap();
-    crate::replace!(session, source => replacement, extern "C" fn(i32) -> i32).unwrap();
+    let mut session = crate::Session::new();
+    crate::replace!(session, source => replacement, extern "C" fn(i32) -> i32);
     assert_eq!(source(1), 99);
     assert_eq!(std::thread::spawn(move || source(1)).join().unwrap(), 5);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(source(1), 5);
     std::mem::forget(page);
 }
@@ -170,22 +170,22 @@ fn unsupported_prefixes_do_not_leave_routes() {
 #[test]
 fn shared_routes_outlive_the_first_owner() {
     let _serial = crate::tests::serial();
-    let mut session = crate::Session::new_local().unwrap();
-    let mock = crate::mock!(session, target, fn(u64) -> u64).unwrap();
-    mock.expect().once().returns(10).unwrap();
+    let mut session = crate::Session::new_local();
+    let mock = crate::mock!(session, target, fn(u64) -> u64);
+    mock.expect().once().returns(10);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (run_tx, run_rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let mut session = crate::Session::new_local().unwrap();
-        let mock = crate::mock!(session, target, fn(u64) -> u64).unwrap();
-        mock.expect().once().returns(20).unwrap();
+        let mut session = crate::Session::new_local();
+        let mock = crate::mock!(session, target, fn(u64) -> u64);
+        mock.expect().once().returns(20);
         ready_tx.send(()).unwrap();
         run_rx.recv().unwrap();
         assert_eq!(target(1), 20);
     });
     ready_rx.recv().unwrap();
     assert_eq!(target(1), 10);
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(target(1), 6);
     run_tx.send(()).unwrap();
     worker.join().unwrap();

@@ -5,22 +5,24 @@ use std::sync::{Mutex, MutexGuard};
 fn local_sessions_recover_from_global_poison_and_reject_raw_replacement() {
     let _serial = serial();
     let _ = std::panic::catch_unwind(|| {
-        let mut session = Session::new_global().unwrap();
-        let mock = crate::mock!(session, original, fn(u64) -> u64).unwrap();
-        mock.expect().returns(4).unwrap();
+        let mut session = Session::new_global();
+        let mock = crate::mock!(session, original, fn(u64) -> u64);
+        mock.expect().returns(4);
         assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
         panic!("poison the writer");
     });
-    let mut session = Session::new_local().unwrap();
+    let mut session = Session::new_local();
     assert!(matches!(Session::try_new_local(), Err(Error::Busy)));
     // SAFETY: valid pointers; local mode rejects raw installation before access.
-    let result = unsafe { session.replace_raw(original as *const (), replacement as *const ()) };
-    assert!(result.is_err());
+    let message = panic_message(|| unsafe {
+        session.replace_raw(original as *const (), replacement as *const ())
+    });
+    assert!(message.contains("local session"));
     drop(session);
     let result = std::panic::catch_unwind(|| {
-        let mut session = Session::new_local().unwrap();
-        let mock = crate::mock!(session, original, fn(u64) -> u64).unwrap();
-        mock.expect().once().returns(2).unwrap();
+        let mut session = Session::new_local();
+        let mock = crate::mock!(session, original, fn(u64) -> u64);
+        mock.expect().once().returns(2);
     });
     assert!(result.is_err());
 }
@@ -33,13 +35,26 @@ pub(crate) fn serial() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Runs `action`, fails the test unless it panics, and returns the panic message.
+pub(crate) fn panic_message<T>(action: impl FnOnce() -> T) -> String {
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action))
+        .err()
+        .expect("expected a panic");
+    match panic.downcast::<String>() {
+        Ok(message) => *message,
+        Err(panic) => panic
+            .downcast_ref::<&str>()
+            .map_or_else(String::new, |message| (*message).to_owned()),
+    }
+}
+
 #[test]
 fn sessions_wait_across_threads_but_nested_sessions_fail() {
     let _serial = serial();
     for local in [true, false] {
-        let session = Session::new_global().unwrap();
-        assert!(matches!(Session::new(), Err(Error::Busy)));
-        assert!(matches!(Session::new_global(), Err(Error::Busy)));
+        let session = Session::new_global();
+        assert_eq!(panic_message(Session::new), Error::Busy.to_string());
+        assert_eq!(panic_message(Session::new_global), Error::Busy.to_string());
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
@@ -50,8 +65,7 @@ fn sessions_wait_across_threads_but_nested_sessions_fail() {
                 Session::new()
             } else {
                 Session::new_global()
-            }
-            .unwrap();
+            };
             done_tx.send(()).unwrap();
         });
         started_rx.recv().unwrap();
@@ -132,50 +146,53 @@ fn all_errors_are_useful() {
 fn poisoned_sessions_recover_after_unwinding() {
     let _serial = serial();
     let panic = std::panic::catch_unwind(|| {
-        let mut session = Session::new_global().unwrap();
-        replace!(session, original => replacement, fn(u64) -> u64).unwrap();
+        let mut session = Session::new_global();
+        replace!(session, original => replacement, fn(u64) -> u64);
         assert_eq!(original(1), 208);
         panic!("simulate failed test");
     });
     assert!(panic.is_err());
     assert_eq!(original(1), 110);
-    let _session = Session::new_global().unwrap();
+    let _session = Session::new_global();
     assert!(matches!(Session::try_new_global(), Err(Error::Busy)));
 }
 
 #[test]
 fn installation_errors_do_not_change_the_target() {
     let _serial = serial();
-    let mut session = Session::new_global().unwrap();
+    let mut session = Session::new_global();
     assert_eq!(
-        replace!(session, original => original, fn(u64) -> u64),
-        Err(Error::SameAddress)
+        panic_message(|| replace!(session, original => original, fn(u64) -> u64)),
+        Error::SameAddress.to_string()
     );
     // SAFETY: Address checks reject null before reading memory.
-    assert!(unsafe { session.replace_raw(std::ptr::null(), replacement as *const ()) }.is_err());
+    panic_message(|| unsafe { session.replace_raw(std::ptr::null(), replacement as *const ()) });
     // SAFETY: The null replacement is also rejected before access.
-    assert!(unsafe { session.replace_raw(original as *const (), std::ptr::null()) }.is_err());
-    replace!(session, original => replacement, fn(u64) -> u64).unwrap();
+    panic_message(|| unsafe { session.replace_raw(original as *const (), std::ptr::null()) });
+    replace!(session, original => replacement, fn(u64) -> u64);
     assert_eq!(
-        replace!(session, original => replacement, fn(u64) -> u64),
-        Err(Error::Overlap)
+        panic_message(|| replace!(session, original => replacement, fn(u64) -> u64)),
+        Error::Overlap.to_string()
     );
     assert_eq!(original(4), 211);
-    session.restore().unwrap();
-    session.restore().unwrap();
+    session.restore();
+    session.restore();
     assert_eq!(original(4), 113);
 }
 
 #[test]
 fn failed_restoration_keeps_ownership_for_retry() {
     let _serial = serial();
-    let mut session = Session::new_global().unwrap();
-    replace!(session, retried => replacement, fn(u64) -> u64).unwrap();
+    let mut session = Session::new_global();
+    replace!(session, retried => replacement, fn(u64) -> u64);
     session.patches[0].replacement[0] ^= 1;
-    assert_eq!(session.restore(), Err(Error::MemoryChanged));
+    assert_eq!(
+        panic_message(|| session.restore()),
+        Error::MemoryChanged.to_string()
+    );
     assert_eq!(session.patches.len(), 1);
     session.patches[0].replacement[0] ^= 1;
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(retried(0), 41);
 }
 

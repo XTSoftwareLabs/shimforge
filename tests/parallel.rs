@@ -28,17 +28,16 @@ impl Meter {
 
 fn isolated(seed: u64) {
     for _ in 0..100 {
-        let mut session = Session::new().unwrap();
-        let mock = mock!(session, value, fn(u64) -> u64).unwrap();
+        let mut session = Session::new();
+        let mock = mock!(session, value, fn(u64) -> u64);
         mock.expect()
             .with(move |arg| *arg == seed)
             .times(3)
-            .returns(seed + 20)
-            .unwrap();
+            .returns(seed + 20);
         for _ in 0..3 {
             assert_eq!(value(seed), seed + 20);
         }
-        session.restore().unwrap();
+        session.restore();
         assert_eq!(value(seed), seed + 1);
     }
 }
@@ -86,11 +85,11 @@ fn calls_from_another_thread_are_safe_during_setup_and_teardown() {
     // execute the entry while those bytes are written. Install once here so the
     // reader below never races that write; later installs reuse the same entry.
     {
-        let mut session = Session::new().unwrap();
-        let mock = mock!(session, value, fn(u64) -> u64).unwrap();
-        mock.expect().once().returns(0).unwrap();
+        let mut session = Session::new();
+        let mock = mock!(session, value, fn(u64) -> u64);
+        mock.expect().once().returns(0);
         assert_eq!(value(41), 0);
-        session.restore().unwrap();
+        session.restore();
     }
     let stop = Arc::new(AtomicBool::new(false));
     let reader = {
@@ -106,11 +105,11 @@ fn calls_from_another_thread_are_safe_during_setup_and_teardown() {
         })
     };
     for round in 0..200 {
-        let mut session = Session::new().unwrap();
-        let mock = mock!(session, value, fn(u64) -> u64).unwrap();
-        mock.expect().once().returns(round).unwrap();
+        let mut session = Session::new();
+        let mock = mock!(session, value, fn(u64) -> u64);
+        mock.expect().once().returns(round);
         assert_eq!(value(41), round);
-        session.restore().unwrap();
+        session.restore();
     }
     stop.store(true, Ordering::Relaxed);
     assert!(reader.join().unwrap() > 0);
@@ -126,15 +125,15 @@ fn struct_methods_keep_one_result_per_thread() {
         .map(|result| {
             let start = Arc::clone(&start);
             std::thread::spawn(move || {
-                let mut session = Session::new().unwrap();
-                let readings = mock!(session, Meter::reading, fn(&Meter, u64) -> u64).unwrap();
-                readings.expect().times(50).returns(result).unwrap();
+                let mut session = Session::new();
+                let readings = mock!(session, Meter::reading, fn(&Meter, u64) -> u64);
+                readings.expect().times(50).returns(result);
                 start.wait();
                 let local = Meter { offset: 10 };
                 for _ in 0..50 {
                     assert_eq!(local.reading(5), result);
                 }
-                session.restore().unwrap();
+                session.restore();
             })
         })
         .collect();
@@ -155,20 +154,16 @@ fn unit_functions_keep_one_behavior_per_thread() {
     let observer = {
         let start = Arc::clone(&start);
         std::thread::spawn(move || {
-            let mut session = Session::new().unwrap();
-            let discards = mock!(session, discard, fn(u64)).unwrap();
-            discards
-                .expect()
-                .times(20)
-                .returning(|_| {
-                    CALLS.fetch_add(1, Ordering::SeqCst);
-                })
-                .unwrap();
+            let mut session = Session::new();
+            let discards = mock!(session, discard, fn(u64));
+            discards.expect().times(20).returning(|_| {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+            });
             start.wait();
             for _ in 0..20 {
                 discard(0);
             }
-            session.restore().unwrap();
+            session.restore();
         })
     };
     start.wait();
@@ -186,18 +181,17 @@ fn owned_results_keep_one_value_per_thread() {
     let worker = {
         let start = Arc::clone(&start);
         std::thread::spawn(move || {
-            let mut session = Session::new().unwrap();
-            let labels = mock!(session, label, fn(u64) -> String).unwrap();
+            let mut session = Session::new();
+            let labels = mock!(session, label, fn(u64) -> String);
             labels
                 .expect()
                 .times(30)
-                .returning(|seed| format!("worker {seed}"))
-                .unwrap();
+                .returning(|seed| format!("worker {seed}"));
             start.wait();
             for _ in 0..30 {
                 assert_eq!(label(8), "worker 8");
             }
-            session.restore().unwrap();
+            session.restore();
         })
     };
     start.wait();

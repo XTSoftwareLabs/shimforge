@@ -86,10 +86,10 @@ fn response_chains_skip_exhausted_rules() {
     let first = add(&state, Config::default().once(), 10);
     let next = add(&state, Config::default().times(1..=2), 20);
     let other = add(&state, Config::default(), 30);
-    assert!(first.verify().is_err());
+    assert!(first.meta.verify().is_err());
     assert!(state.verify().is_err());
     assert_eq!(state.select(&|rule| rule.value != 30).value, 10);
-    first.verify().unwrap();
+    first.verify();
     assert_eq!(first.clone().calls(), 1);
     for _ in 0..2 {
         assert_eq!(state.select(&|rule| rule.value != 30).value, 20);
@@ -113,11 +113,12 @@ fn missing_and_forbidden_calls_stay_failed() {
     let state = State::new("write");
     assert!(panics(|| drop(state.select(&|_| true))).contains("no expectation"));
     let never = add(&state, Config::default().times(0), 1);
-    never.verify().unwrap();
+    never.verify();
     assert!(panics(|| drop(state.select(&|_| true))).contains("forbidden"));
     assert_eq!(never.calls(), 0);
     assert!(
         never
+            .meta
             .verify()
             .unwrap_err()
             .to_string()
@@ -165,6 +166,7 @@ fn out_of_order_calls_stay_failed() {
     state.select(&|rule| rule.value == 2);
     assert!(
         later
+            .meta
             .verify()
             .unwrap_err()
             .to_string()
@@ -234,7 +236,7 @@ fn count_overflow_is_reported_without_wrapping() {
     lock(&expectation.meta.progress).calls = usize::MAX;
     assert!(panics(|| drop(state.select(&|_| true))).contains("overflow"));
     assert_eq!(expectation.calls(), usize::MAX);
-    assert!(expectation.verify().is_err());
+    assert!(expectation.meta.verify().is_err());
 }
 
 #[test]
@@ -254,7 +256,7 @@ fn checkpoint_clears_only_completed_expectations() {
     state.checkpoint().unwrap();
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     assert_eq!(expectation.calls(), 1);
-    expectation.verify().unwrap();
+    expectation.verify();
     state.checkpoint().unwrap();
     add(&state, Config::default(), 2);
     assert_eq!(state.select(&|_| true).value, 2);

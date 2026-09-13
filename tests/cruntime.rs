@@ -46,17 +46,13 @@ fn leading_number(text: &CStr) -> (c_long, usize) {
 #[test]
 fn an_environment_lookup_returns_a_chosen_string() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let lookup = mock!(
         session,
         getenv,
         unsafe extern "C" fn(*const c_char) -> *mut c_char
-    )
-    .unwrap();
-    lookup
-        .expect()
-        .returning(|_| c"canary".as_ptr().cast_mut())
-        .unwrap();
+    );
+    lookup.expect().returning(|_| c"canary".as_ptr().cast_mut());
 
     assert_eq!(deployment_slot().as_deref(), Some("canary"));
 }
@@ -64,13 +60,12 @@ fn an_environment_lookup_returns_a_chosen_string() {
 #[test]
 fn an_environment_lookup_can_match_the_requested_key() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let lookup = mock!(
         session,
         getenv,
         unsafe extern "C" fn(*const c_char) -> *mut c_char
-    )
-    .unwrap();
+    );
     lookup
         .expect()
         .with(|name| {
@@ -79,29 +74,27 @@ fn an_environment_lookup_can_match_the_requested_key() {
             name == c"DEPLOY_SLOT"
         })
         .once()
-        .returning(|_| c"blue".as_ptr().cast_mut())
-        .unwrap();
+        .returning(|_| c"blue".as_ptr().cast_mut());
     // Every other key keeps reporting an unset variable.
-    lookup.expect().returning(|_| ptr::null_mut()).unwrap();
+    lookup.expect().returning(|_| ptr::null_mut());
 
     assert_eq!(deployment_slot().as_deref(), Some("blue"));
     let other = CString::new("PATH").unwrap();
     // SAFETY: the key is a valid C string.
     assert!(unsafe { getenv(other.as_ptr()) }.is_null());
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(deployment_slot(), None);
 }
 
 #[test]
 fn a_parser_writes_through_its_output_pointer_and_returns_a_value() {
     let _serial = serial();
-    let mut session = Session::new().unwrap();
+    let mut session = Session::new();
     let parse = mock!(
         session,
         strtol,
         unsafe extern "C" fn(*const c_char, *mut *mut c_char, c_int) -> c_long
-    )
-    .unwrap();
+    );
     parse
         .expect()
         .with(|_, end, base| !end.is_null() && *base == 10)
@@ -110,10 +103,9 @@ fn a_parser_writes_through_its_output_pointer_and_returns_a_value() {
             // SAFETY: the caller supplies a writable slot and a long enough string.
             unsafe { *end = text.cast_mut().add(4) };
             815
-        })
-        .unwrap();
+        });
 
     assert_eq!(leading_number(c"1234 units"), (815, 4));
-    session.restore().unwrap();
+    session.restore();
     assert_eq!(leading_number(c"1234 units"), (1234, 4));
 }

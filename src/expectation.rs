@@ -176,8 +176,13 @@ impl Expectation {
     }
 
     /// Checks the call count and any order failure.
-    pub fn verify(&self) -> Result<(), Error> {
-        self.meta.verify()
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expectation missed calls or received a call it rejected.
+    #[track_caller]
+    pub fn verify(&self) {
+        crate::error::check(self.meta.verify());
     }
 }
 

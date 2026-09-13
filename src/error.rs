@@ -62,3 +62,15 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// Returns the value, or panics with the error's message.
+///
+/// The panic reports the caller's location, so a failed setup points at the test.
+#[doc(hidden)]
+#[track_caller]
+pub fn check<T>(result: Result<T, Error>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => panic!("{error}"),
+    }
+}

@@ -161,8 +161,8 @@ fn deny_datagram(socket: &UdpSocket, contents: &[u8], target: SocketAddr) -> io:
 fn filesystem_read_supplies_data_to_unmodified_business_code() {
     let _serial = serial();
     READ_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, fs::read::<&Path> => member_data, fn(&Path) -> io::Result<Vec<u8>>).unwrap();
+    let mut session = Session::new_global();
+    replace!(session, fs::read::<&Path> => member_data, fn(&Path) -> io::Result<Vec<u8>>);
     assert_eq!(
         load_members(Path::new("virtual/members.txt")).unwrap(),
         ["alice", "bob"]
@@ -174,9 +174,8 @@ fn filesystem_read_supplies_data_to_unmodified_business_code() {
 fn missing_file_uses_the_application_default() {
     let _serial = serial();
     READ_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, fs::read::<&Path> => missing_member_data, fn(&Path) -> io::Result<Vec<u8>>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, fs::read::<&Path> => missing_member_data, fn(&Path) -> io::Result<Vec<u8>>);
     assert!(
         load_members(Path::new("virtual/members.txt"))
             .unwrap()
@@ -189,9 +188,8 @@ fn missing_file_uses_the_application_default() {
 fn malformed_file_contents_are_rejected() {
     let _serial = serial();
     READ_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, fs::read::<&Path> => invalid_member_data, fn(&Path) -> io::Result<Vec<u8>>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, fs::read::<&Path> => invalid_member_data, fn(&Path) -> io::Result<Vec<u8>>);
     assert_eq!(
         load_members(Path::new("virtual/members.txt"))
             .unwrap_err()
@@ -206,9 +204,8 @@ fn filesystem_write_captures_the_generated_path_and_payload() {
     let _serial = serial();
     WRITE_CALLS.store(0, Ordering::SeqCst);
     WRITES.lock().unwrap().clear();
-    let mut session = Session::new_global().unwrap();
-    replace!(session, fs::write::<&Path, &[u8]> => capture_write, fn(&Path, &[u8]) -> io::Result<()>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, fs::write::<&Path, &[u8]> => capture_write, fn(&Path, &[u8]) -> io::Result<()>);
     save_members(Path::new("virtual/members.txt"), &["alice", "bob"]).unwrap();
     assert_eq!(WRITE_CALLS.load(Ordering::SeqCst), 1);
     let writes = WRITES.lock().unwrap();
@@ -221,9 +218,8 @@ fn filesystem_write_captures_the_generated_path_and_payload() {
 fn filesystem_write_permission_errors_reach_the_caller() {
     let _serial = serial();
     WRITE_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, fs::write::<&Path, &[u8]> => deny_write, fn(&Path, &[u8]) -> io::Result<()>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, fs::write::<&Path, &[u8]> => deny_write, fn(&Path, &[u8]) -> io::Result<()>);
     let error =
         save_members(Path::new("virtual/readonly/members.txt"), &["alice", "bob"]).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -234,8 +230,8 @@ fn filesystem_write_permission_errors_reach_the_caller() {
 fn file_open_can_report_a_missing_session_without_touching_disk() {
     let _serial = serial();
     OPEN_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, File::open::<&str> => missing_session, fn(&str) -> io::Result<File>).unwrap();
+    let mut session = Session::new_global();
+    replace!(session, File::open::<&str> => missing_session, fn(&str) -> io::Result<File>);
     assert!(!has_saved_session("virtual/session.bin").unwrap());
     assert_eq!(OPEN_CALLS.load(Ordering::SeqCst), 1);
 }
@@ -244,8 +240,8 @@ fn file_open_can_report_a_missing_session_without_touching_disk() {
 fn file_open_permission_errors_are_not_treated_as_missing_data() {
     let _serial = serial();
     OPEN_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, File::open::<&str> => deny_session, fn(&str) -> io::Result<File>).unwrap();
+    let mut session = Session::new_global();
+    replace!(session, File::open::<&str> => deny_session, fn(&str) -> io::Result<File>);
     assert_eq!(
         has_saved_session("virtual/session.bin").unwrap_err().kind(),
         io::ErrorKind::PermissionDenied
@@ -257,9 +253,8 @@ fn file_open_permission_errors_are_not_treated_as_missing_data() {
 fn tcp_timeout_is_handled_without_connecting() {
     let _serial = serial();
     CONNECT_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, TcpStream::connect_timeout => connection_timeout, fn(&SocketAddr, Duration) -> io::Result<TcpStream>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, TcpStream::connect_timeout => connection_timeout, fn(&SocketAddr, Duration) -> io::Result<TcpStream>);
     assert!(!upstream_is_available(SocketAddr::from(([192, 0, 2, 10], 443))).unwrap());
     assert_eq!(CONNECT_CALLS.load(Ordering::SeqCst), 1);
 }
@@ -268,9 +263,8 @@ fn tcp_timeout_is_handled_without_connecting() {
 fn tcp_connection_errors_reach_the_caller_without_connecting() {
     let _serial = serial();
     CONNECT_CALLS.store(0, Ordering::SeqCst);
-    let mut session = Session::new_global().unwrap();
-    replace!(session, TcpStream::connect_timeout => connection_refused, fn(&SocketAddr, Duration) -> io::Result<TcpStream>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, TcpStream::connect_timeout => connection_refused, fn(&SocketAddr, Duration) -> io::Result<TcpStream>);
     let error = upstream_is_available(SocketAddr::from(([192, 0, 2, 10], 443))).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
     assert_eq!(CONNECT_CALLS.load(Ordering::SeqCst), 1);
@@ -284,9 +278,8 @@ fn udp_send_captures_the_metric_without_delivering_a_packet() {
     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     let target = receiver.local_addr().unwrap();
-    let mut session = Session::new_global().unwrap();
-    replace!(session, UdpSocket::send_to::<SocketAddr> => capture_datagram, fn(&UdpSocket, &[u8], SocketAddr) -> io::Result<usize>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, UdpSocket::send_to::<SocketAddr> => capture_datagram, fn(&UdpSocket, &[u8], SocketAddr) -> io::Result<usize>);
     assert_eq!(
         emit_counter(&sender, target, "jobs.completed", 12).unwrap(),
         19
@@ -311,9 +304,8 @@ fn udp_send_errors_reach_the_caller_without_delivering_a_packet() {
     let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
     let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
     let target = receiver.local_addr().unwrap();
-    let mut session = Session::new_global().unwrap();
-    replace!(session, UdpSocket::send_to::<SocketAddr> => deny_datagram, fn(&UdpSocket, &[u8], SocketAddr) -> io::Result<usize>)
-        .unwrap();
+    let mut session = Session::new_global();
+    replace!(session, UdpSocket::send_to::<SocketAddr> => deny_datagram, fn(&UdpSocket, &[u8], SocketAddr) -> io::Result<usize>);
     assert_eq!(
         emit_counter(&sender, target, "jobs.completed", 12)
             .unwrap_err()

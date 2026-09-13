@@ -86,7 +86,7 @@ fn expand_replacement(input: syn::Result<Replacement>) -> Tokens {
                 #root::__install_replacement!(session, source as *const (),
                     __dispatch::<__Site, #(#types,)* __Return> as *const (), target as *const ())
             }
-            __install(#session, #source, #target)
+            #root::__private::check(__install(#session, #source, #target))
         }
     }
 }
@@ -224,7 +224,8 @@ fn generate(input: Input) -> Tokens {
         quote! {
             impl<__Output> __ShimforgeBuilder<__Output>
             where __Output: ::std::marker::Send + 'static + ::std::convert::Into<#output> {
-                pub fn returns(self, value: __Output) -> ::std::result::Result<#root::Expectation, #root::Error>
+                #[track_caller]
+                pub fn returns(self, value: __Output) -> #root::Expectation
                 where __Output: ::std::clone::Clone {
                     self.returning(move |#(#names),*| {
                         let _ = (#(#names),*);
@@ -232,14 +233,16 @@ fn generate(input: Input) -> Tokens {
                     })
                 }
 
-                pub fn return_once(self, value: __Output) -> ::std::result::Result<#root::Expectation, #root::Error> {
+                #[track_caller]
+                pub fn return_once(self, value: __Output) -> #root::Expectation {
                     self.returning_once(move |#(#names),*| {
                         let _ = (#(#names),*);
                         value.into()
                     })
                 }
 
-                pub fn returns_default(self) -> ::std::result::Result<#root::Expectation, #root::Error>
+                #[track_caller]
+                pub fn returns_default(self) -> #root::Expectation
                 where __Output: ::std::default::Default {
                     self.returning(|#(#names),*| {
                         let _ = (#(#names),*);
@@ -321,9 +324,11 @@ fn generate(input: Input) -> Tokens {
                 }
             }
 
-            pub fn verify(&self) -> ::std::result::Result<(), #root::Error> { self.state.verify() }
+            #[track_caller]
+            pub fn verify(&self) { #root::__private::check(self.state.verify()) }
 
-            pub fn checkpoint(&self) -> ::std::result::Result<(), #root::Error> { self.state.checkpoint() }
+            #[track_caller]
+            pub fn checkpoint(&self) { #root::__private::check(self.state.checkpoint()) }
         }
 
         struct __ShimforgeBuilder<__Output> {
@@ -355,29 +360,34 @@ fn generate(input: Input) -> Tokens {
                 self
             }
 
-            pub fn returning<__Action>(self, action: __Action) -> ::std::result::Result<#root::Expectation, #root::Error>
+            #[track_caller]
+            pub fn returning<__Action>(self, action: __Action) -> #root::Expectation
             where __Action: #binder ::std::ops::FnMut(#(#args),*) -> #output + ::std::marker::Send + 'static {
-                self.state.add(self.config, |meta| __ShimforgeRule {
+                #root::__private::check(self.state.add(self.config, |meta| __ShimforgeRule {
                     meta,
                     matcher: self.matcher,
                     action: ::std::sync::Mutex::new(__ShimforgeAction::Repeat(::std::boxed::Box::new(action))),
-                })
+                }))
             }
 
-            pub fn returning_once<__Action>(self, action: __Action) -> ::std::result::Result<#root::Expectation, #root::Error>
+            #[track_caller]
+            pub fn returning_once<__Action>(self, action: __Action) -> #root::Expectation
             where __Action: #binder ::std::ops::FnOnce(#(#args),*) -> #output + ::std::marker::Send + 'static {
-                self.state.add(self.config.for_once()?, |meta| __ShimforgeRule {
+                let config = #root::__private::check(self.config.for_once());
+                #root::__private::check(self.state.add(config, |meta| __ShimforgeRule {
                     meta,
                     matcher: self.matcher,
                     action: ::std::sync::Mutex::new(__ShimforgeAction::Once(::std::option::Option::Some(::std::boxed::Box::new(action)))),
-                })
+                }))
             }
 
-            pub fn never(self) -> ::std::result::Result<#root::Expectation, #root::Error> {
+            #[track_caller]
+            pub fn never(self) -> #root::Expectation {
                 self.times(0usize).panics("forbidden mock call")
             }
 
-            pub fn panics(self, message: impl ::std::convert::Into<::std::string::String>) -> ::std::result::Result<#root::Expectation, #root::Error> {
+            #[track_caller]
+            pub fn panics(self, message: impl ::std::convert::Into<::std::string::String>) -> #root::Expectation {
                 let message = message.into();
                 self.returning(move |#(#names),*| {
                     let _ = (#(#names),*);
@@ -388,7 +398,7 @@ fn generate(input: Input) -> Tokens {
 
         #constants
 
-        (|| -> ::std::result::Result<__ShimforgeMock, #root::Error> {
+        #root::__private::check((|| -> ::std::result::Result<__ShimforgeMock, #root::Error> {
             let __shimforge_original = #source;
             #signature_check
             let __shimforge_source = __shimforge_original as #unsafety #abi fn(#(#infer),*) -> _;
@@ -423,7 +433,7 @@ fn generate(input: Input) -> Tokens {
             });
             #root::__install!(__shimforge_session, __shimforge_source as *const (), __shimforge_target as *const (), __shimforge_state.clone(), __shimforge_detach)?;
             ::std::result::Result::Ok(__ShimforgeMock { state: __shimforge_state })
-        })()
+        })())
     }}
 }
 
