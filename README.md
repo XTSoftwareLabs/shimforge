@@ -523,36 +523,6 @@ and [`tests/io.rs`](tests/io.rs). Imported OS and C runtime calls are covered by
 [`tests/async_network.rs`](tests/async_network.rs) and
 [`tests/http_client.rs`](tests/http_client.rs).
 
-## Safety and limits
-
-The public API checks signatures and keeps unsafe operations inside the library.
-You do not need an `unsafe` block, but you must follow these rules to avoid memory
-errors. No thread may call a target during its first code patch. Global patches
-also need calls stopped during restoration, including drop. The session lock
-coordinates sessions, not function calls.
-
-Source and replacement must match in calling convention, argument and return
-layout, and lifetimes for every caller. Keep global replacements loaded until they
-are restored and locally patched functions loaded until the process exits.
-Do not mock memory allocation, locking, or the OS functions shimforge itself uses.
-On macOS, use a normal test executable without Hardened Runtime; shimforge does
-not change signing settings, entitlements, or system security settings.
-Lifetime checks catch common mistakes in ordinary Rust functions. Generic
-instances, nested borrowed types, pre-cast pointers, and unsafe or native
-functions still need manual lifetime checks.
-
-The test profile above reduces inlining and other optimizations without source
-changes. It cannot undo calls already inlined into prebuilt libraries or functions
-the linker merged. Short entries and unsupported instruction forms are rejected.
-Only the supplied entry point is patched; import jumps are not followed.
-`replace!` accepts only noncapturing closures and cannot swap different `async fn`
-future types. Use `mock!` for captured closures and `mock_async` for native futures.
-
-Memory permissions are restored after each write. A memory error from `restore()`
-keeps the failed patch so you can retry. An expectation error is returned after the
-mocks have been removed. A failed rollback or a failed code restoration during drop
-aborts the process.
-
 ## Licensing
 
 shimforge is source-available under either of two licenses, at your option. You
@@ -577,11 +547,3 @@ info@xtsoftwarelabs.com.
 Neither license is approved by the Open Source Initiative. If your dependency
 policy allows only OSI licenses, treat shimforge as commercial software and ask
 for a license rather than assuming it is blocked.
-
-## Contributing
-
-Run `./scripts/verify.ps1` on Windows or `bash scripts/verify.sh` on Linux or macOS.
-The checks require rustfmt, clippy, llvm-tools-preview, and cargo-llvm-cov 0.8.7.
-Use `./scripts/validate-docker.ps1` to run Linux checks in Docker.
-All platforms require 100% line and function coverage of library code. Tests and
-dependencies are excluded. Reports are saved under `coverage/`.
