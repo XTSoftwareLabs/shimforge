@@ -9,7 +9,7 @@ repository = "https://github.com/XTSoftwareLabs/shimforge"
 readme = "README.md"
 keywords = ["mock", "testing", "detour"]
 categories = ["development-tools::testing"]
-include = ["src/**", "tests/**", "Cargo.toml", "COMMERCIAL.md", "LICENSE*", "README.md"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "COMMERCIAL.md", "LICENSE*", "README.md"]
 
 [workspace]
 members = ["macros"]
@@ -26,6 +26,15 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1"] }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt"], default-features = false }
+
+# Examples double as tests: `test = true` makes `cargo test` run their #[test] functions.
+[[example]]
+name = "clock"
+test = true
+
+[[example]]
+name = "environment"
+test = true
 
 [profile.test]
 opt-level = 0
