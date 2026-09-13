@@ -429,6 +429,12 @@ impl Drop for Session {
 /// type Input = &'static str;
 /// shimforge::mock!(session, source, fn(Input) -> usize);
 /// ```
+/// A function that only accepts `'static` borrows needs an `unsafe fn` signature:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new_global();
+/// fn source(value: &'static str) -> usize { value.len() }
+/// shimforge::mock!(session, source, fn(&'static str) -> usize);
+/// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
 /// let mut session = shimforge::Session::new_global();
@@ -558,6 +564,12 @@ fn finish(result: Result<(), Error>, fatal: fn() -> !) {
 /// let mut session = shimforge::Session::new_global();
 /// fn source(value: &mut usize) { *value += 1; }
 /// shimforge::replace!(session, source => |_| (), fn(&'static mut usize));
+/// ```
+/// A function that only accepts `'static` borrows needs an `unsafe fn` signature:
+/// ```compile_fail
+/// let mut session = shimforge::Session::new_global();
+/// fn source(value: &'static str) -> usize { value.len() }
+/// shimforge::replace!(session, source => |value| value.len(), fn(&'static str) -> usize);
 /// ```
 /// A static result cannot become a shorter borrow:
 /// ```compile_fail
