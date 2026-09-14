@@ -92,27 +92,37 @@ fn calls_from_another_thread_are_safe_during_setup_and_teardown() {
         session.restore();
     }
     let stop = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
     let reader = {
         let stop = Arc::clone(&stop);
+        let calls = Arc::clone(&calls);
         std::thread::spawn(move || {
-            let mut calls = 0u64;
             while !stop.load(Ordering::Relaxed) {
                 // This thread holds no session, so it always sees the original.
                 assert_eq!(value(41), 42);
-                calls += 1;
+                calls.fetch_add(1, Ordering::Relaxed);
             }
-            calls
         })
     };
-    for round in 0..200 {
+    // 200 local rounds take about 2 ms on macOS, and starting the reader thread can
+    // take longer there. Keep installing and restoring until the reader has called
+    // the function during the rounds, so the overlap this test checks always happens.
+    let calls_before_rounds = calls.load(Ordering::Relaxed);
+    let mut round = 0u64;
+    while round < 200 || calls.load(Ordering::Relaxed) == calls_before_rounds {
+        assert!(
+            round < 1_000_000,
+            "the reader thread never called the function while mocks were installed"
+        );
         let mut session = Session::new();
         let mock = mock!(session, value, fn(u64) -> u64);
         mock.expect().once().returns(round);
         assert_eq!(value(41), round);
         session.restore();
+        round += 1;
     }
     stop.store(true, Ordering::Relaxed);
-    assert!(reader.join().unwrap() > 0);
+    reader.join().unwrap();
     assert_eq!(value(41), 42);
 }
 
