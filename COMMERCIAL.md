@@ -49,8 +49,8 @@ in shimforge. Write to **info@xtsoftwarelabs.com** with:
 - roughly how many developers will use shimforge
 - anything your legal or procurement team requires
 
-You will get a quote and a license agreement. Pricing is per company, not per
-seat, and a license covers every version released while it is active.
+You will get a quote and a license agreement. A license covers every version
+released while it is active.
 
 ## Questions
 
