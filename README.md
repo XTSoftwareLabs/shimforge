@@ -706,7 +706,7 @@ the license text with any copy you pass on.
 
 Commercial use by a company above the Small Business thresholds is not covered by
 either license. See [COMMERCIAL.md](COMMERCIAL.md) or write to
-info@xtsoftwarelabs.com.
+shimforge@xtsoftwarelabs.com.
 
 Neither license is approved by the Open Source Initiative. If your dependency
 policy allows only OSI licenses, treat shimforge as commercial software and ask
