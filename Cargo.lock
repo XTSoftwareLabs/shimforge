@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "shimforge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "http-body-util",
  "hyper",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "shimforge-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
