@@ -55,7 +55,6 @@ fn claim_slot_succeeds_without_a_real_directory() {
         .returning(|_| Ok(()));
 
     assert!(claim_slot().is_ok());
-    session.verify();
 }
 ```
 
@@ -99,7 +98,8 @@ use shimforge::{Session, mock, replace};
 ```
 
 Every example below is a complete test. shimforge panics when a mock cannot be
-installed or an expectation is not met, so there is no `Result` to handle.
+installed or an expectation is not met, so there is no `Result` to handle. The
+session checks every expectation when it is dropped at the end of the test.
 
 ## Thread-local and global sessions
 
@@ -191,7 +191,6 @@ fn matching_calls_are_counted() {
 
     assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
     assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
-    session.verify();
 }
 ```
 
@@ -214,6 +213,43 @@ fallbacks. An unmatched call, an extra call, or a wrong order panics and makes
 verification fail. The default count allows any number of calls; one-time
 responses default to exactly one. The returned handle has `calls()` and
 `verify()`, and dropping it leaves the expectation in place.
+
+## Checking expectations during a test
+
+The session checks every expectation when it is dropped. To catch a missing call
+earlier, before the next step runs, call `verify()` on the session or on a mock
+handle. `checkpoint()` also verifies, then clears the rules for the next step.
+
+```rust
+use shimforge::{Session, mock};
+
+fn fetch_config(name: &str) -> String {
+    // Reads a configuration service in production.
+    format!("live {name}")
+}
+
+fn start_worker() -> String {
+    fetch_config("worker")
+}
+
+#[test]
+fn expectations_are_checked_before_the_next_step() {
+    let mut session = Session::new();
+    let fetch = mock!(session, fetch_config, fn(&str) -> String);
+    fetch
+        .expect()
+        .with(|name| *name == "worker")
+        .once()
+        .returns("threads=4".to_owned());
+
+    assert_eq!(start_worker(), "threads=4");
+    // Fails here instead of at the end of the test if the fetch was skipped.
+    session.verify();
+
+    fetch.expect().returns("threads=8".to_owned());
+    assert_eq!(start_worker(), "threads=8");
+}
+```
 
 ## Return values and call order
 
@@ -255,7 +291,6 @@ fn results_follow_the_call_order() {
     assert_eq!(next_id(), 41);
     assert_eq!(next_id(), 42);
     assert!(save_id(42));
-    session.verify();
 }
 ```
 
@@ -440,7 +475,6 @@ fn async_functions_return_mocked_results() {
         name: "payroll".to_owned(),
     };
     assert_eq!(ready(ledger.balance()), 4_200);
-    session.verify();
 }
 ```
 
@@ -500,7 +534,6 @@ fn a_client_method_that_returns_a_boxed_future_is_mocked() {
         response.as_mut().poll(&mut context),
         Poll::Ready(Ok(body)) if body == "healthy"
     ));
-    session.verify();
 }
 ```
 

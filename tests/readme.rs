@@ -35,7 +35,6 @@ mod why_shimforge {
             .returning(|_| Ok(()));
 
         assert!(claim_slot().is_ok());
-        session.verify();
     }
 }
 
@@ -113,7 +112,37 @@ mod matching_arguments_and_counting_calls {
 
         assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
         assert_eq!(load_port(Path::new("service.port")).unwrap(), 8080);
+    }
+}
+
+mod checking_expectations_during_a_test {
+    use shimforge::{Session, mock};
+
+    fn fetch_config(name: &str) -> String {
+        // Reads a configuration service in production.
+        format!("live {name}")
+    }
+
+    fn start_worker() -> String {
+        fetch_config("worker")
+    }
+
+    #[test]
+    fn expectations_are_checked_before_the_next_step() {
+        let mut session = Session::new();
+        let fetch = mock!(session, fetch_config, fn(&str) -> String);
+        fetch
+            .expect()
+            .with(|name| *name == "worker")
+            .once()
+            .returns("threads=4".to_owned());
+
+        assert_eq!(start_worker(), "threads=4");
+        // Fails here instead of at the end of the test if the fetch was skipped.
         session.verify();
+
+        fetch.expect().returns("threads=8".to_owned());
+        assert_eq!(start_worker(), "threads=8");
     }
 }
 
@@ -151,7 +180,6 @@ mod return_values_and_call_order {
         assert_eq!(next_id(), 41);
         assert_eq!(next_id(), 42);
         assert!(save_id(42));
-        session.verify();
     }
 }
 
@@ -312,7 +340,6 @@ mod async_functions {
             name: "payroll".to_owned(),
         };
         assert_eq!(ready(ledger.balance()), 4_200);
-        session.verify();
     }
 }
 
@@ -362,7 +389,6 @@ mod client_libraries_that_return_boxed_futures {
             response.as_mut().poll(&mut context),
             Poll::Ready(Ok(body)) if body == "healthy"
         ));
-        session.verify();
     }
 }
 
