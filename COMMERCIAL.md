@@ -43,7 +43,7 @@ buy one if you need terms the PolyForm licenses do not give you, such as:
 ## How to buy
 
 Commercial licenses are sold by XT SOFTWARE LABS LLC, which holds the copyright
-in shimforge. Write to **info@xtsoftwarelabs.com** with:
+in shimforge. Write to **shimforge@xtsoftwarelabs.com** with:
 
 - your company name and website
 - roughly how many developers will use shimforge
@@ -55,7 +55,7 @@ released while it is active.
 ## Questions
 
 If you are not sure which side of the threshold you fall on, or whether your
-intended use is covered, ask at **info@xtsoftwarelabs.com** before you rely on
+intended use is covered, ask at **shimforge@xtsoftwarelabs.com** before you rely on
 it. Asking is free and we would rather answer early than argue later.
 
 This page is a summary for convenience. Where it and the license texts disagree,
