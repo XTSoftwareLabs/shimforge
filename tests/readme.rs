@@ -146,6 +146,36 @@ mod checking_expectations_during_a_test {
     }
 }
 
+mod clearing_rules_between_steps {
+    use shimforge::{Session, mock};
+
+    fn read_status(service: &str) -> String {
+        // Queries a health endpoint in production.
+        format!("{service}: live")
+    }
+
+    fn is_ready(service: &str) -> bool {
+        read_status(service).ends_with("ready")
+    }
+
+    #[test]
+    fn each_step_starts_with_its_own_rules() {
+        let mut session = Session::new();
+        let status = mock!(session, read_status, fn(&str) -> String);
+
+        // Step 1: the service is still starting, however often it is asked.
+        status.expect().returns("billing: starting".to_owned());
+        assert!(!is_ready("billing"));
+        assert!(!is_ready("billing"));
+        // Checks step 1 and removes its rule, which would otherwise keep answering.
+        status.checkpoint();
+
+        // Step 2: the service is ready.
+        status.expect().once().returns("billing: ready".to_owned());
+        assert!(is_ready("billing"));
+    }
+}
+
 mod return_values_and_call_order {
     use shimforge::{Sequence, Session, mock};
 
