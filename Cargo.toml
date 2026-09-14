@@ -1,6 +1,6 @@
 [package]
 name = "shimforge"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Test Rust code without test-only traits or changes to production code."
@@ -16,7 +16,7 @@ members = ["macros"]
 resolver = "3"
 
 [dependencies]
-shimforge-macros = { version = "0.1.0", path = "macros" }
+shimforge-macros = { version = "0.1.1", path = "macros" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
