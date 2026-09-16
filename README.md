@@ -79,8 +79,7 @@ shimforge = "0.1"
 ```
 
 Keep your production code as it is. No custom test profile is needed with Cargo's
-defaults. Use unoptimized tests: optimized builds can inline calls that shimforge
-cannot intercept. Even unoptimized builds may inline some calls.
+defaults.
 
 Import the two macros and the session type, then run `cargo test` as usual:
 
