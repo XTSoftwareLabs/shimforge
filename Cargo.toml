@@ -4,12 +4,12 @@ version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Test Rust code without test-only traits or changes to production code."
-license = "PolyForm-Small-Business-1.0.0 OR PolyForm-Noncommercial-1.0.0"
+license = "MIT"
 repository = "https://github.com/XTSoftwareLabs/shimforge"
 readme = "README.md"
 keywords = ["mock", "testing", "detour"]
 categories = ["development-tools::testing"]
-include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "COMMERCIAL.md", "LICENSE*", "README.md"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "LICENSE*", "README.md"]
 
 [workspace]
 members = ["macros"]
