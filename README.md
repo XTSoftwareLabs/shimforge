@@ -78,9 +78,6 @@ Add shimforge as a dev dependency:
 shimforge = "0.1"
 ```
 
-Keep your production code as it is. No custom test profile is needed with Cargo's
-defaults.
-
 Import the two macros and the session type, then run `cargo test` as usual:
 
 ```rust
