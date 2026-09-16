@@ -36,13 +36,6 @@ test = true
 name = "environment"
 test = true
 
-[profile.test]
-opt-level = 0
-debug = true
-lto = false
-codegen-units = 1
-incremental = false
-
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
