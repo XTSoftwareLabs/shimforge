@@ -78,18 +78,9 @@ Add shimforge as a dev dependency:
 shimforge = "0.1"
 ```
 
-Keep your production code as it is, and add these settings to the workspace root
-`Cargo.toml`. They reduce inlining so that calls still reach a patchable entry
-point:
-
-```toml
-[profile.test]
-opt-level = 0
-debug = true
-lto = false
-codegen-units = 1
-incremental = false
-```
+Keep your production code as it is. No custom test profile is needed with Cargo's
+defaults. Use unoptimized tests: optimized builds can inline calls that shimforge
+cannot intercept. Even unoptimized builds may inline some calls.
 
 Import the two macros and the session type, then run `cargo test` as usual:
 
