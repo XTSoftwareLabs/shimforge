@@ -3,7 +3,7 @@
 [![CI](https://github.com/XTSoftwareLabs/shimforge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/XTSoftwareLabs/shimforge/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/shimforge.svg)](https://crates.io/crates/shimforge)
 [![docs.rs](https://img.shields.io/docsrs/shimforge)](https://docs.rs/shimforge)
-[![License: PolyForm](https://img.shields.io/badge/license-PolyForm-blue.svg)](#licensing)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#licensing)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://github.com/XTSoftwareLabs/shimforge/blob/main/Cargo.toml)
 
 Test Rust code without test-only traits or changes to production code.
@@ -689,25 +689,7 @@ and [`tests/io.rs`](tests/io.rs). Imported OS and C runtime calls are covered by
 
 ## Licensing
 
-shimforge is copyright XT SOFTWARE LABS LLC and source-available under either of
-two licenses, at your option. You need to satisfy only one of them.
-
-- [PolyForm Small Business 1.0.0](LICENSE-POLYFORM-SMALL-BUSINESS), for a company
-  with fewer than 100 people and less than 1,000,000 USD (2019, inflation
-  adjusted) of revenue in the prior tax year. Parent companies, subsidiaries, and
-  entities under common control count together.
-- [PolyForm Noncommercial 1.0.0](LICENSE-POLYFORM-NONCOMMERCIAL), for any
-  noncommercial purpose. This covers personal study, hobby projects, and
-  research, and it covers charitable organizations, educational institutions,
-  public research organizations, and government institutions whatever their size.
-
-Under either one, use, modification, and redistribution are free of charge. Keep
-the license text with any copy you pass on.
-
-Commercial use by a company above the Small Business thresholds is not covered by
-either license. See [COMMERCIAL.md](COMMERCIAL.md) or write to
-shimforge@xtsoftwarelabs.com.
-
-Neither license is approved by the Open Source Initiative. If your dependency
-policy allows only OSI licenses, treat shimforge as commercial software and ask
-for a license rather than assuming it is blocked.
+shimforge is copyright XT SOFTWARE LABS LLC and released under the
+[MIT License](LICENSE). Use, modification, and redistribution are free of
+charge, for any purpose, commercial or not. Keep the copyright notice and the
+license text with any copy you pass on.
